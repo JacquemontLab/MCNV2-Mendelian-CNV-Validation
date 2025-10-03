@@ -56,22 +56,41 @@ body <- dashboardBody(
 						br(),
 						sidebarLayout(
 							sidebarPanel(
-								fileInput("cnvs_file", label = "CNV File input (mandatory)"),
-								fileInput("pedigree_file", label = "Pedigree File input (mandatory)"),
-								fileInput("annot_file", label = "Annotation File input (optional)"),
-								selectInput("select", label = "Genome build",
-														choices = list("hg38" = 38, "hg19" = 19),
+								h4("Input files"),
+								fileInput("cnv_tsv", label = "CNV File (mandatory, tsv)"),
+								fileInput("ped_tsv", label = "Pedigree File (mandatory, tsv)"),
+								#fileInput("genes_tsv", label = "Gene Annotation File (optional, tsv)"),
+								#fileInput("prob_tsv", label = "Problematic regions (optional, tsv)", accept = NULL),
+								h4("Parameters"),
+								selectInput("build", label = "Genome build",
+														choices = list("GRCh38/hg38" = 38, "GRCh37/hg19" = 37),
 														selected = 38),
+								#radioButtons("build", "Genome build", c("38","37"), selected = "38", inline = TRUE),
+								numericInput("th_prob", "Problematic regions threshold (child CNV proportion)", 0.50, min = 0, max = 1, step = 0.05),
+								numericInput("th_cnv", "Inheritance threshold (child CNV proportion)", 0.50, min = 0, max = 1, step = 0.05),
 								hr(),
+								div(class = "run-status", uiOutput("run_state")),
+								div(class = "outdir-box", verbatimTextOutput("outdir_display")),
 								actionButton("submit_preprocess", label = "Submit",
-														 icon = icon("gear"), disabled = TRUE)
+														 icon = icon("gear"), disabled = FALSE)
 
 							),
 
-							# Show a plot of the generated distribution
 							mainPanel(
-								tableOutput("summary_table"),
-								tableOutput("header"),
+								bsCollapse(id = "preprocess_panel", 
+													 bsCollapsePanel("Preprocessing table (Preview)", 
+													 								DTOutput("preview_preproc_tbl"),
+													 								hr(),
+													 								actionButton("submit_inheritance", 
+													 														 label = "Proceed to Inheritance calculation",
+													 														 icon = icon("gear"), disabled = FALSE), style = "info"),
+													 bsCollapsePanel("inheritance_panel", 
+													 								DTOutput("Inheritance table (Preview)"),
+													 								hr(),
+													 								actionButton("submit_mpexploration", 
+													 														 label = "Proceed to Mendelian Precision analysis",
+													 														 icon = icon("gear"), disabled = FALSE), style = "success")
+								)               
 							)
 						)
 		),
