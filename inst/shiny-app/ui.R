@@ -77,15 +77,15 @@ body <- dashboardBody(
 							),
 
 							mainPanel(
-								bsCollapse(id = "preprocess_panel", 
+								bsCollapse(id = "preprocess_panel", open = "Preprocessing table (Preview)",
 													 bsCollapsePanel("Preprocessing table (Preview)", 
 													 								DTOutput("preview_preproc_tbl"),
 													 								hr(),
 													 								actionButton("submit_inheritance", 
 													 														 label = "Proceed to Inheritance calculation",
 													 														 icon = icon("gear"), disabled = FALSE), style = "info"),
-													 bsCollapsePanel("inheritance_panel", 
-													 								DTOutput("Inheritance table (Preview)"),
+													 bsCollapsePanel("Inheritance table (Preview)", 
+													 								DTOutput("preview_inherit_tbl"),
 													 								hr(),
 													 								actionButton("submit_mpexploration", 
 													 														 label = "Proceed to Mendelian Precision analysis",
