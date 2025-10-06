@@ -10,6 +10,7 @@
 library(shiny)
 library(shinydashboard)
 library(shinyjs)
+library(shinyBS)
 library(fresh)
 
 my_theme <- create_theme(
@@ -57,10 +58,14 @@ body <- dashboardBody(
 						sidebarLayout(
 							sidebarPanel(
 								h4("Input files"),
-								fileInput("cnv_tsv", label = "CNV File (mandatory, tsv)"),
+								fileInput("cnv_tsv", label = "CNV File (mandatory, BED)",
+													accept = ".tsv"),
+								verbatimTextOutput("cnv_tsv_status"),
 								fileInput("ped_tsv", label = "Pedigree File (mandatory, tsv)"),
+								verbatimTextOutput("ped_tsv_status"),
 								#fileInput("genes_tsv", label = "Gene Annotation File (optional, tsv)"),
 								#fileInput("prob_tsv", label = "Problematic regions (optional, tsv)", accept = NULL),
+								hr(),
 								h4("Parameters"),
 								selectInput("build", label = "Genome build",
 														choices = list("GRCh38/hg38" = 38, "GRCh37/hg19" = 37),
@@ -72,14 +77,15 @@ body <- dashboardBody(
 								div(class = "run-status", uiOutput("run_state")),
 								div(class = "outdir-box", verbatimTextOutput("outdir_display")),
 								actionButton("submit_preprocess", label = "Submit",
-														 icon = icon("gear"), disabled = FALSE)
+														 icon = icon("gear"), disabled = TRUE)
 
 							),
 
 							mainPanel(
-								bsCollapse(id = "preprocess_panel", open = "Preprocessing table (Preview)",
-													 bsCollapsePanel("Preprocessing table (Preview)", 
+								bsCollapse(id = "preprocess_panel", open = "Annotation table (Preview)",
+													 bsCollapsePanel("Annotation table (Preview)", 
 													 								DTOutput("preview_preproc_tbl"),
+													 								verbatimTextOutput("annot_tsv_status"),
 													 								hr(),
 													 								actionButton("submit_inheritance", 
 													 														 label = "Proceed to Inheritance calculation",
