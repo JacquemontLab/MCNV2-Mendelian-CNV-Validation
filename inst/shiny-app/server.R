@@ -29,7 +29,7 @@ function(input, output, session) {
 		filepath <- input$cnv_tsv$datapath
 		
 		# Essaie de valider le fichier
-		ret <- check_input_file(filepath, required_cols = c("SampleID", "Chr", "Type"))
+		ret <- check_input_file(filepath, file_type = "cnv")
 		
 		cnv_check(ret$status)
 		if(cnv_check()){
@@ -45,7 +45,7 @@ function(input, output, session) {
 		filepath <- input$ped_tsv$datapath
 		
 		# Essaie de valider le fichier
-		ret <- check_input_file(filepath, required_cols = NULL)
+		ret <- check_input_file(filepath, file_type = "ped")
 		
 		ped_check(ret$status)
 		if(ped_check()){
