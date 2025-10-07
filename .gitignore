@@ -11,3 +11,5 @@ Thumbs.db
 .Rcheck/
 .Renviron
 .env
+man/*
+NAMESPACE
