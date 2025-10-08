@@ -24,6 +24,7 @@ Imports:
         shinyWidgets,
         fresh,
         readr,
+        data.table,
         DT,
         ggplot2,
         dplyr,
