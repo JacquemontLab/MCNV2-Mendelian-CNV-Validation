@@ -1,1 +1,5 @@
 polars
+bioframe
+pandas
+numpy
+future

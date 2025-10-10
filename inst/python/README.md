@@ -1,72 +1,130 @@
+CNV Inheritance Annotation (child vs. parents)
 
+Annotate whether each child CNV is inherited (True) or de novo (False) using reciprocal overlap with parental CNVs, and mark gene-level transmission as True/False or intergenic.
 
-### Bin Contents
+The script expects a gene-annotated CNV table and a pedigree. It outputs CHILD rows only with two added columns:
 
+transmitted_cnv (bool): True = inherited, False = de novo
 
-#### CNV Annotation:
+transmitted_gene (bool / "intergenic"): gene-level inheritance for each child row
 
-annotate_CNV.py 
+Overlap is computed with bioframe.overlap.
 
-requires bedtools on system Path
-```bash
-    python annotate_CNV.py \
-        --cnv data/cnv_input.tsv \
-        --gene_resource data/gene_annotations.bed \
-        --prob_regions data/problematic_regions.tsv \
-        --out data/cnv_geneDB.tsv \
-        --genome_version GRCh38
+#####################################################################################
+
+Requirements
+
+Python ≥ 3.8
+
+Packages:
+
+pandas
+
+numpy
+
+bioframe
+
+Install
+python3 -m pip install --upgrade pip
+python3 -m pip install pandas numpy bioframe
+
+###############################################################################
+##############################################################################
+
+Inputs
+1) Gene-annotated CNV table (--cnv_geneAnnot)
+
+Tab-delimited (TSV); .tsv or .tsv.gz both supported.
+
+Expected columns (exact or auto-detected variants in parentheses):
+
+SampleID (sampleid, sample, id, iid)
+
+Chr (chr, chrom, chromosome, contig)
+
+Start (start, pos, begin, position)
+
+End (end, stop, STOP, END)
+
+Type (type, svtype) — values normalized to DEL/DUP (also accepts DELETION/DUPLICATION)
+
+gene_name (optional; gene, symbol)
+
+CNV type must match between child and parent (DEL↔DEL, DUP↔DUP) for inheritance.
+
+2) Pedigree (--pedigree)
+
+Tab-delimited (TSV).
+
+Auto-detects the following (case-insensitive, prefix-match):
+
+Child: ChildID (or SampleID, child, proband, subject, …)
+
+Father: FatherID (or father, biofather, …)
+
+Mother: MotherID (or mother, biomother, …)
+
+Only complete trios are used (ChildID, FatherID, MotherID all present).
+
+A unique TrioKey = ChildID_FatherID_MotherID is created.
+
+#######################################################################
+#######################################################################
+Output
+
+A TSV at --output containing CHILD rows only, plus:
+
+transmitted_cnv (bool)
+
+transmitted_gene (bool / "intergenic" / NaN)
+
+All original CNV columns are preserved.
+
+######################################################################
+
+Method
+
+Trios: Build TrioKey and long table (TrioKey, SampleID, family_statue ∈ {child,father,mother}).
+
+Join CNVs with trio roles by SampleID. Many-to-many is allowed (parents can appear in multiple trio keys).
+
+Normalize:
+
+Type → DEL/DUP (accepts DELETION/DUPLICATION)
+
+Coordinates to numeric; filter End > Start and Type ∈ {DEL,DUP}.
+
+CNV-level inheritance:
+
+For each unique child CNV (TrioKey, Chr, Start, End, Type), compute overlaps with parent CNVs of the same (TrioKey, Type).
+
+Reciprocal overlap threshold: ov_len/child_len ≥ T and ov_len/parent_len ≥ T where T = --overlap (default 0.5).
+
+Mark transmitted_cnv = True for those child CNVs; else False.
+
+Gene-level inheritance per row:
+
+If gene_name present: for a child row with a gene, set transmitted_gene = True if the same (TrioKey, gene_name, Type) exists in any parent; else False.
+
+If the child row has no gene, set transmitted_gene = "intergenic".
+
+Parent rows are not output.
+
+Overlap definition follows bioframe (0-based, half-open).
+
+##############################################################
+#############################################################
+
+Usage
+
 ```
-Will produce a header like this:
-```
-┌─────────┬───────────┬───────────┬─────────┬───────────┬───────────┬───────────┬────────────────┬─────────────────┬───────────┬────────┬────────────┬───────────────────┬────────────────────────────────┐
-│   Chr   │   Start   │    End    │  TYPE   │ SampleID  │  t_Start  │   t_End   │   gene_type    │   transcript    │ gene_name │ LOEUF  │ bp_overlap │ transcript_length │ cnv_problematic_region_overlap │
-│ varchar │   int64   │   int64   │ varchar │  varchar  │   int64   │   int64   │    varchar     │     varchar     │  varchar  │ double │   int64    │       int64       │             double             │
-├─────────┼───────────┼───────────┼─────────┼───────────┼───────────┼───────────┼────────────────┼─────────────────┼───────────┼────────┼────────────┼───────────────────┼────────────────────────────────┤
-│ chr3    │ 195778253 │ 195791547 │ DEL     │ SP0042077 │ 195746771 │ 195811929 │ protein_coding │ ENST00000463781 │ MUC4      │  0.953 │      13294 │             65158 │             0.9888679954870252 │
-│ chr22   │  21208539 │  21216717 │ DUP     │ SP0042109 │        -1 │        -1 │                │                 │           │        │          0 │                 0 │             0.9998777356645067 │
-└─────────┴───────────┴───────────┴─────────┴───────────┴───────────┴───────────┴────────────────┴─────────────────┴───────────┴────────┴────────────┴───────────────────┴────────────────────────────────┘
-```
-#### Annotate CNV-Inheritance 
-
-For using just genomic coordinates
-cnv_trio_inheritence.py
-
-```bash
 python cnv_inheritance.py \
-    --cnv data/merged_cnvs.tsv.gz \
-    --pedigree data/filtered_pedigree.tsv \
-    --output results/annotated_child_cnv.tsv \
-    --type_col TYPE \
-    --overlap 0.5,0.1
-```
-Will produce a header like this with one column per requested overlap condition:
-```
-┌───────────┬─────────┬───────────┬───────────┬─────────┬────────────────────────┐
-│ SampleID  │   Chr   │   Start   │    End    │  TYPE   │ Observed_in_Parent_0.5 │
-│  varchar  │ varchar │   int64   │   int64   │ varchar │        boolean         │
-├───────────┼─────────┼───────────┼───────────┼─────────┼────────────────────────┤
-│ SP0042124 │ chr1    │ 152600682 │ 152614148 │ DUP     │ false                  │
-│ SP0042124 │ chr1    │ 152600682 │ 152614148 │ DUP     │ false                  │
-└───────────┴─────────┴───────────┴───────────┴─────────┴────────────────────────┘
+  --cnv_geneAnnot "/path/to/SPARK_CNV_annotated_By_Genes.tsv" \
+  --pedigree "/path/to/trios_WGS_SPARK.tsv" \
+  --output "annotated_child_cnv.tsv" \
+  --overlap 0.5
 ```
 
-For a gene-level inheritance assessment:
+--overlap is the single reciprocal fraction applied to both sides (child and parent).
 
-
-```bash
-    python get_transmitted_genes.py \
-        --pedigree data/filtered_pedigree.tsv \
-        --anno_cnv_file data/annotated_cnvs.tsv \  #from annotate_CNV.py
-        --output cnv_anno_with_transmitted_gene.tsv
-```
-
-Which makes this header:
-```
-┌─────────┬──────────┬──────────┬─────────┬───────────┬──────────┬──────────┬────────────────┬─────────────────┬───────────┬────────┬────────────┬───────────────────┬────────────────────────────────┬─────────────────┐
-│   Chr   │  Start   │   End    │  TYPE   │ SampleID  │ t_Start  │  t_End   │   gene_type    │   transcript    │ gene_name │ LOEUF  │ bp_overlap │ transcript_length │ cnv_problematic_region_overlap │ transmittedGene │
-│ varchar │  int64   │  int64   │ varchar │  varchar  │  int64   │  int64   │    varchar     │     varchar     │  varchar  │ double │   int64    │       int64       │             double             │     boolean     │
-├─────────┼──────────┼──────────┼─────────┼───────────┼──────────┼──────────┼────────────────┼─────────────────┼───────────┼────────┼────────────┼───────────────────┼────────────────────────────────┼─────────────────┤
-│ chr20   │  1603760 │  1619994 │ DEL     │ SP0042125 │  1561385 │  1620009 │ protein_coding │ ENST00000381605 │ SIRPB1    │  1.189 │      16234 │             58624 │             0.7433323067446874 │ true            │
-│ chr1    │ 25246394 │ 25307901 │ DEL     │ SP0042125 │ 25242249 │ 25247454 │ protein_coding │ ENST00000243189 │ RSRP1     │  1.423 │       1060 │              5205 │              0.796953241854718 │ true            │
-└─────────┴──────────┴──────────┴─────────┴───────────┴──────────┴──────────┴────────────────┴─────────────────┴───────────┴────────┴────────────┴───────────────────┴────────────────────────────────┴─────────────────┘
-```
+Use quotes around paths with spaces.

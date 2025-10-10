@@ -1,71 +1,355 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+CNV inheritance annotation (child vs parents) using reciprocal overlap.
+
+Inputs
+------
+- --cnv_geneAnnot : Gene-annotated CNV table (TSV / TSV.GZ), e.g. columns
+  SampleID, Chr, Start, End or Stop, Type, gene_name.
+- --pedigree      : Pedigree table (TSV) containing ChildID / FatherID / MotherID
+  (column names auto-detected with sensible fallbacks).
+- --overlap       : Single reciprocal overlap fraction threshold (child and parent),
+  e.g. 0.5 means >=50% overlap on both the child CNV and the parent CNV.
+
+Output
+------
+- --output        : TSV containing CHILD rows only, with:
+    - transmitted_cnv  (bool): True=inherited, False=de novo
+    - transmitted_gene (bool / "intergenic" / NaN)
+
+Notes
+-----
+- Overlap is computed with bioframe.overlap (0-based half-open intervals).
+- CNV type matching is enforced (DEL with DEL, DUP with DUP).
+- End is auto-harmonized from Stop/STOP if needed.
+- If a parent belongs to multiple TrioKeys (multiple probands), a many-to-many
+  merge is allowed so each link is evaluated.
+"""
+
+from __future__ import annotations
 import argparse
-import polars as pl
+import sys
+import pandas as pd
+import numpy as np
+
+# Dependency: bioframe
+try:
+    import bioframe as bf
+except Exception as e:
+    print("Error: this script requires 'bioframe' (pip install bioframe).", file=sys.stderr)
+    raise
 
 
-"""
-Annotate CNVs with Transmitted Gene Information
+# ============================ Utilities ============================
 
-This script reads a filtered pedigree file and annotated CNVs, identifies parent and child CNVs,
-and flags which disrupted genes are transmitted from parents to children.
+def read_table_auto(path: str) -> pd.DataFrame:
+    """
+    Read a tab-delimited file (TSV/TSV.GZ). Uses pandas' default C engine.
+    """
+    return pd.read_table(path, sep="\t", dtype=str, low_memory=False)
 
-Usage example:
-    python get_transmitted_genes.py \
-        --pedigree data/filtered_pedigree.tsv \
-        --anno_cnv_file data/annotated_cnvs.tsv \
-        --output cnv_anno_with_transmitted_gene.tsv
 
-Dependencies:
-    - Python 3.8+
-    - Polars 1.27+
-    
-Author:
-    Benjamin Clark
-"""
+def _find_col(df: pd.DataFrame, candidates) -> str | None:
+    """
+    Return the first matching column name among `candidates` using case-insensitive
+    equality or startswith() matching. Returns None if nothing matches.
+    """
+    cols = list(df.columns)
+    lower_map = {c: c.lower() for c in cols}
+    for cand in candidates:
+        for c in cols:
+            lc = lower_map[c]
+            if lc == cand or lc.startswith(cand):
+                return c
+    return None
+
+
+def load_and_normalize_pedigree(path_or_df, sep: str = r"\t") -> pd.DataFrame:
+    """
+    Normalize pedigree to columns: ChildID, FatherID, MotherID (dtype 'string').
+    Accepts a DataFrame or a path.
+    """
+    if isinstance(path_or_df, pd.DataFrame):
+        ped_raw = path_or_df.copy()
+    else:
+        ped_raw = pd.read_csv(path_or_df, sep=sep, dtype=str)
+
+    child_col  = _find_col(ped_raw, ["sampleid", "child", "proband", "subject"])
+    father_col = _find_col(ped_raw, ["father", "biofather", "fatherid", "biofatherid", "dad"])
+    mother_col = _find_col(ped_raw, ["mother", "biomother", "motherid", "biomotherid", "mom"])
+
+    if child_col  is None and "SampleID" in ped_raw.columns: child_col  = "SampleID"
+    if father_col is None and "FatherID"  in ped_raw.columns: father_col = "FatherID"
+    if mother_col is None and "MotherID"  in ped_raw.columns: mother_col = "MotherID"
+
+    rename_map = {}
+    if child_col:  rename_map[child_col]  = "ChildID"
+    if father_col: rename_map[father_col] = "FatherID"
+    if mother_col: rename_map[mother_col] = "MotherID"
+
+    ped = ped_raw.rename(columns=rename_map)
+    for c in ["ChildID", "FatherID", "MotherID"]:
+        if c not in ped.columns:
+            ped[c] = pd.NA
+
+    ped = ped[["ChildID", "FatherID", "MotherID"]].astype("string")
+    for c in ["ChildID", "FatherID", "MotherID"]:
+        ped[c] = ped[c].astype("string").str.strip()
+
+    return ped
+
+
+def keep_complete_trios(ped: pd.DataFrame) -> pd.DataFrame:
+    """
+    Keep complete trios only and create a unique TrioKey.
+    """
+    m = (~ped["ChildID"].isna() & (ped["ChildID"] != "") &
+         ~ped["FatherID"].isna() & (ped["FatherID"] != "") &
+         ~ped["MotherID"].isna() & (ped["MotherID"] != ""))
+    out = ped.loc[m].copy()
+    out["TrioKey"] = out["ChildID"] + "_" + out["FatherID"] + "_" + out["MotherID"]
+    out = out.drop_duplicates(subset=["TrioKey"]).reset_index(drop=True)
+    return out[["ChildID", "FatherID", "MotherID", "TrioKey"]]
+
+
+def canonicalize_cnv_columns(cnv: pd.DataFrame) -> pd.DataFrame:
+    """
+    Detect and rename CNV columns to canonical names:
+      SampleID, Chr, Start, End, Type, (gene_name optional)
+
+    This makes the script robust to common header variants like:
+    - stop/STOP/END -> End
+    - chr/CHROM/chromosome -> Chr
+    - svtype/type -> Type
+    - symbol/gene -> gene_name
+    """
+    col_map = {}
+
+    sample = _find_col(cnv, ["sampleid", "sample", "iid", "id"])
+    chrom  = _find_col(cnv, ["chr", "chrom", "chromosome", "contig"])
+    start  = _find_col(cnv, ["start", "pos", "begin", "position"])
+    end    = _find_col(cnv, ["end", "stop"])
+    typ    = _find_col(cnv, ["type", "svtype"])
+    gene   = _find_col(cnv, ["gene_name", "gene", "symbol"])
+
+    if sample is None and "SampleID" in cnv.columns: sample = "SampleID"
+    if chrom  is None and "Chr"      in cnv.columns: chrom  = "Chr"
+    if start  is None and "Start"    in cnv.columns: start  = "Start"
+    if end    is None and "End"      in cnv.columns: end    = "End"
+    if typ    is None and "Type"     in cnv.columns: typ    = "Type"
+    # gene is optional
+
+    if sample: col_map[sample] = "SampleID"
+    if chrom:  col_map[chrom]  = "Chr"
+    if start:  col_map[start]  = "Start"
+    if end:    col_map[end]    = "End"
+    if typ:    col_map[typ]    = "Type"
+    if gene:   col_map[gene]   = "gene_name"
+
+    cnv2 = cnv.rename(columns=col_map)
+
+    required = ["SampleID", "Chr", "Start", "End", "Type"]
+    missing = [c for c in required if c not in cnv2.columns]
+    if missing:
+        raise ValueError(f"Missing columns in CNV (after normalization): {missing}")
+
+    return cnv2
+
+
+# ============================ Pipeline ============================
+
+def run_pipeline(
+    cnv_geneannot_path: str,
+    pedigree_path: str,
+    output_path: str,
+    overlap_frac: float,
+):
+    # --- Pedigree: load, normalize, keep complete trios
+    ped_src  = read_table_auto(pedigree_path)
+    ped_norm = load_and_normalize_pedigree(ped_src, sep=r"\t")
+    trios    = keep_complete_trios(ped_norm).replace({'': pd.NA})
+
+    # Long format: (TrioKey, SampleID, family_statue)
+    role_map = {"ChildID": "child", "FatherID": "father", "MotherID": "mother"}
+    trios_reformated = (
+        trios.melt(
+            id_vars=["TrioKey"],
+            value_vars=["ChildID", "FatherID", "MotherID"],
+            var_name="family_statue",
+            value_name="SampleID",
+        )
+        .dropna(subset=["SampleID"])
+        .assign(family_statue=lambda d: d["family_statue"].map(role_map))
+        [["TrioKey", "SampleID", "family_statue"]]
+        .drop_duplicates(subset=["TrioKey", "SampleID", "family_statue"])
+    )
+
+    # --- CNVs: load and harmonize expected columns
+    cnv_raw = read_table_auto(cnv_geneannot_path)
+    cnv     = canonicalize_cnv_columns(cnv_raw)
+
+    # Join CNVs with trio roles (allow many-to-many to support parents shared across trios)
+    merged = pd.merge(
+        cnv,
+        trios_reformated,
+        on="SampleID",
+        how="inner"
+    )
+
+    # ===== CNV-level inheritance (segment-based) =====
+    VALID_TYPES = {"DEL", "DUP"}
+
+    df = merged.copy()
+
+    # Normalize Type and family roles
+    df["Type"] = (
+        df["Type"].astype(str).str.strip().str.upper()
+          .replace({"DELETION": "DEL", "DUPLICATION": "DUP"})
+    )
+    df["family_statue"] = df["family_statue"].astype(str).str.strip().str.lower()
+
+    # Coordinates as numeric
+    df["Start"] = pd.to_numeric(df["Start"], errors="coerce")
+    df["End"]   = pd.to_numeric(df["End"],   errors="coerce")
+
+    # Basic filtering
+    df = df[df["Type"].isin(VALID_TYPES)].copy()
+    df = df.dropna(subset=["TrioKey", "Chr", "Start", "End", "Type", "family_statue"])
+    df = df.query("End > Start").copy()
+
+    # Child CNV ID (used to propagate inheritance to all rows)
+    df["cnv_id"] = (
+        df["TrioKey"].astype(str) + "_" +
+        df["Chr"].astype(str) + "_" +
+        df["Start"].astype("Int64").astype(str) + "_" +
+        df["End"].astype("Int64").astype(str) + "_" +
+        df["Type"]
+    )
+
+    is_child  = df["family_statue"].eq("child")
+    is_parent = df["family_statue"].isin(["father", "mother"])
+
+    child_uni = (
+        df.loc[is_child, ["TrioKey", "Chr", "Start", "End", "Type", "cnv_id"]]
+          .drop_duplicates()
+          .rename(columns={"Chr": "chrom", "Start": "start", "End": "end"})
+    )
+    parents = (
+        df.loc[is_parent, ["TrioKey", "Chr", "Start", "End", "Type"]]
+          .drop_duplicates()
+          .rename(columns={"Chr": "chrom", "Start": "start", "End": "end"})
+    )
+
+    # Reciprocal overlap (same TrioKey & Type) via bioframe
+    if not child_uni.empty and not parents.empty:
+        ov = bf.overlap(
+            child_uni[["chrom", "start", "end", "TrioKey", "Type", "cnv_id"]],
+            parents  [["chrom", "start", "end", "TrioKey", "Type"]],
+            on=["TrioKey", "Type"],
+            how="inner",
+            suffixes=("", "_p"),
+        )
+        if not ov.empty:
+            # overlap_len = max(0, min(end, end_p) - max(start, start_p))
+            ov_len    = np.clip(np.minimum(ov["end"], ov["end_p"]) - np.maximum(ov["start"], ov["start_p"]), a_min=0, a_max=None)
+            child_len = (ov["end"]   - ov["start"]).clip(lower=1)
+            parent_len= (ov["end_p"] - ov["start_p"]).clip(lower=1)
+
+            thr = float(overlap_frac)
+            ok_child  = (ov_len / child_len)  >= thr
+            ok_parent = (ov_len / parent_len) >= thr
+
+            inherited_ids = set(ov.loc[ok_child & ok_parent, "cnv_id"])
+        else:
+            inherited_ids = set()
+    else:
+        inherited_ids = set()
+
+    child_status = pd.DataFrame({
+        "cnv_id": child_uni["cnv_id"],
+        "transmitted_cnv": child_uni["cnv_id"].isin(inherited_ids)  # True=inherited, False=de novo
+    })
+
+    df = df.merge(child_status, on="cnv_id", how="left")
+
+    # ===== Gene-level (per-row): True / False / "intergenic" =====
+    gdf = df.copy()
+
+    gdf["Type"]          = gdf["Type"].astype(str).str.strip().str.upper()
+    gdf["family_statue"] = gdf["family_statue"].astype(str).str.strip().str.lower()
+
+    if "gene_name" not in gdf.columns:
+        gdf["transmitted_gene"] = pd.NA
+    else:
+        gdf["gene_name_norm"] = (
+            gdf["gene_name"].astype("string").str.strip()
+               .replace({'': pd.NA, 'nan': pd.NA, 'NaN': pd.NA, 'None': pd.NA})
+        )
+
+        is_child_g  = gdf["family_statue"].eq("child")
+        is_parent_g = gdf["family_statue"].isin(["father", "mother"])
+        has_gene    = gdf["gene_name_norm"].notna()
+
+        parent_gene_keys = (
+            gdf.loc[is_parent_g & has_gene, ["TrioKey", "gene_name_norm", "Type"]]
+              .drop_duplicates()
+              .assign(_parent_has=True)
+        )
+        child_gene_keys = (
+            gdf.loc[is_child_g & has_gene, ["TrioKey", "gene_name_norm", "Type"]]
+              .drop_duplicates()
+        )
+
+        tg = child_gene_keys.merge(
+                parent_gene_keys,
+                on=["TrioKey", "gene_name_norm", "Type"],
+                how="left"
+             )
+        # Boolean for children with a gene in the row: True=inherited (present in a parent), False=de novo
+        tg["transmitted_gene"] = tg["_parent_has"].fillna(False)
+        tg = tg.drop(columns=["_parent_has"])
+
+        gdf = gdf.merge(tg, on=["TrioKey", "gene_name_norm", "Type"], how="left")
+        # Intergenic rows for children (no gene on the row)
+        gdf.loc[is_child_g & (~has_gene), "transmitted_gene"] = "intergenic"
+        # Hide for parents
+        gdf.loc[~is_child_g, "transmitted_gene"] = np.nan
+        gdf = gdf.drop(columns=["gene_name_norm"])
+
+    # ===== Output: CHILD rows only =====
+    child_df = gdf.loc[gdf["family_statue"].eq("child")].copy()
+    child_df.to_csv(output_path, sep="\t", index=False)
+    print(f"OK: {len(child_df)} CHILD rows written -> {output_path}")
+
+
 def main():
-    # Set up argument parser
-    parser = argparse.ArgumentParser(description="Read pedigree and CNV annotation files")
-    parser.add_argument(
-        "--pedigree",
-        type=str,
-        required=True,
-        help="Path to the filtered pedigree TSV file"
+    parser = argparse.ArgumentParser(
+        description="Annotate CNV inheritance (child vs parents) using reciprocal overlap; 'Type' column is assumed."
     )
-    parser.add_argument(
-        "--anno_cnv_file",
-        type=str,
-        required=True,
-        help="Path to the annotated CNVs TSV file"
-    )
-
-    parser.add_argument(
-        "--output",
-        type=str,
-        required=False,
-        default="cnv_anno_with_transmitted_gene.tsv",
-        help="Output filename"
-    )
+    parser.add_argument("--cnv_geneAnnot", required=True,
+                        help="Gene-annotated CNV file (TSV/TSV.GZ). Expected columns (or variants auto-detected): SampleID, Chr, Start, End/Stop, Type, [gene_name].")
+    parser.add_argument("--pedigree", required=True,
+                        help="Pedigree file (TSV) with ChildID/FatherID/MotherID (column names auto-detected).")
+    parser.add_argument("--output", required=True,
+                        help="Output TSV (CHILD rows only).")
+    parser.add_argument("--overlap", type=float, default=0.5,
+                        help="Single reciprocal overlap threshold for child and parent. Default: 0.5")
 
     args = parser.parse_args()
 
-    # Read CSVs
-    ped = pl.scan_csv(args.pedigree, separator='\t')
-    anno_cnv = pl.scan_csv(args.anno_cnv_file, separator='\t').drop_nulls()
+    try:
+        run_pipeline(
+            cnv_geneannot_path=args.cnv_geneAnnot,
+            pedigree_path=args.pedigree,
+            output_path=args.output,
+            overlap_frac=args.overlap,
+        )
+    except Exception as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
 
-
-    #Defining parent CNVs
-    parents_cnv = pl.concat([anno_cnv.join(ped, left_on='SampleID', right_on=["FatherID"], how='semi'),
-                             anno_cnv.join(ped, left_on='SampleID', right_on=["MotherID"], how='semi')])
-    #Defining child CNVs
-    child_cnv = anno_cnv.join(ped, how='semi', on='SampleID')
-
-    #Defining transmitted disrupted genes
-    inherited_cnv = pl.concat([(child_cnv.join(parents_cnv, how='semi', on=['SampleID', "gene_name", "TYPE"])  #inherited are found in the parent table
-                              .with_columns(pl.lit(True).alias("transmittedGene"))),
-                        child_cnv.join(parents_cnv, how='anti', on=['SampleID', "gene_name", "TYPE"])          #not inherited are not found in the parent table
-                              .with_columns(pl.lit(False).alias("transmittedGene"))])
-    #writing out
-    inherited_cnv.sink_csv(f"{args.output}", separator='\t')
 
 if __name__ == "__main__":
     main()
