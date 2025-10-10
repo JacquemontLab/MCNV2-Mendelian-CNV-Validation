@@ -34,5 +34,6 @@ Imports:
         biomaRt,
         patchwork,
         reticulate,
-        arrow
+        arrow,
+        DT
 RoxygenNote: 7.3.2
