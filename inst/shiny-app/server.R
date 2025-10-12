@@ -10,6 +10,7 @@
 library(shiny)
 
 options(shiny.maxRequestSize = Inf)  # No upload size limit
+options(arrow.pull_as_vector = TRUE)
 
 params <- getOption("MCNV2.params", default = list())
 
@@ -332,15 +333,17 @@ function(input, output, session) {
 		
 		dataset <- arrow::open_tsv_dataset(inherit_output_file())
 		
-		# Récupère les colonnes int64 dynamiquement
-		schema_info <- dataset$schema
-		int64_cols <- names(Filter(function(x) x == arrow::int64(), schema_info$types))
-		
-		print(int64_cols)
-		
-		# Mutate avec cast Arrow-compatible
-		dataset <- dataset %>%
-			dplyr::mutate(across(all_of(int64_cols), ~arrow::cast(., arrow::float64())))
+		dataset <- dataset %>% mutate(Size_Range = case_when(
+			Size < 30000 ~ "1-30kb",
+			Size < 40000 ~ "30-40kb",
+			Size < 50000 ~ "40-50kb",
+			Size < 100000 ~ "50-100kb",
+			Size < 200000 ~ "100-200kb",
+			Size < 500000 ~ "200-500kb",
+			Size < 1000000 ~ "500-1M",
+			Size >= 1000000 ~ ">1M",
+			TRUE ~ NA_character_
+		))
 		
 		filtered_dataset <- dataset %>% 
 			dplyr::filter(
@@ -369,36 +372,25 @@ function(input, output, session) {
 															 yes = "transmitted_cnv", 
 															 no = "transmitted_gene")
 		
-		filtered_ds() %>% head() %>% print()
-		arrow::schema(filtered_ds())
-		
 		mp <- filtered_ds() %>% 
 			dplyr::select(cnv_id, Type, all_of(transmission_col)) %>%
-			mutate(cnv_id = as.character(cnv_id), 
-						 Type = as.character(Type), 
-						 transmission = as.character(!!sym(transmission_col))) %>%
-			distinct() %>% collect()
-		 
-		mp <- mp %>% dplyr::select(Type, transmission) %>% 
+			mutate(transmission = as.logical(.data[[transmission_col]])) %>%
+			distinct() %>%
 			group_by(Type, transmission) %>% 
-			summarise(n = n(), .groups = "drop_last") 
+			summarise(n = n(), .groups = "drop") %>%
+			collect() %>% 
+			tidyr::complete(Type, transmission = c(FALSE, TRUE), fill = list(n = 0)) %>%
+			group_by(Type) %>% 
+			summarise(n_de_novo = sum(n[!transmission]), 
+								n_inherited = sum(n[transmission]),
+								prop_inherited = n_inherited / (n_de_novo + n_inherited))
 		
-		mp <- mp %>% 
-			tidyr::complete(transmission := c("False", "True"), 
-											fill = list(n = 0)) %>% 
-			summarise( n_de_novo = sum(n[transmission == "False"]), 
-								 n_inherited = sum(n[transmission == "True"]), 
-								 prop_inherited = ifelse((n_de_novo + n_inherited) > 0, 
-								 												n_inherited / (n_de_novo + n_inherited),
-								 												NA_real_), 
-								 .groups = "drop" )
-		
-		n_cnvs_all <- dataset %>% select(cnv_id) %>% distinct() %>% summarize(n = n()) %>% collect()
-		n_cnvs_filtered <- filtered_ds() %>% select(cnv_id) %>% distinct() %>% summarize(n = n()) %>% collect()
+		n_cnvs_all <- dataset %>% dplyr::select(cnv_id) %>% distinct() %>% summarize(n = n()) %>% collect()
+		n_cnvs_filtered <- filtered_ds() %>% dplyr::select(cnv_id) %>% distinct() %>% summarize(n = n()) %>% collect()
 		
 		output$n_filtered_cnvs <- renderValueBox({
 			valueBox(
-				paste0(n_cnvs_filtered$n,"/",n_cnvs_all$n), "Filtered CNVs", 
+				n_cnvs_filtered$n, paste0("Filtered CNVs over ",n_cnvs_all$n), 
 				icon = icon("filter"), color = "purple"
 			)
 		})

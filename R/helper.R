@@ -174,7 +174,7 @@ compute_inheritance <- function(cnvs_file, pedigree_file, output_file,
 
 parse_cnv_size_value <- function(x) {
 	if(grepl(x = x, pattern = ">")){
-		x <- Inf
+		x <- 1000000000
 	} else {
 		x <- gsub("kb", "000", x)
 		x <- gsub("Mb", "000000", x)
@@ -276,18 +276,19 @@ create_dynamic_ticks <- function(range_values) {
 # }
 # 
 
-mp_vs_metric_by_size <- function(ds, quality_metric, transmission_col) {
+mp_vs_metric_by_size <- function(ds, quality_metric, transmission_col, 
+																 inheritance_flag = "True") {
 	
-	range_values <- range(ds %>% pull(all_of(quality_metric), as_vector = TRUE))
+	range_values <- range(ds %>% pull(all_of(quality_metric)))
 	rng_infos <- create_dynamic_ticks(range_values)
 
 	res <- lapply(rng_infos$ticks, function(th) {
 		tmp <- ds %>% dplyr::filter(.data[[quality_metric]] >= th) 
-		n <- tmp %>% summarise(n()) %>% pull(as_vector = TRUE)
+		n <- tmp %>% summarise(n()) %>% pull()
 		
 		if (n == 0) return(NULL)
 		tmp %>%
-			mutate(trans = !!sym(transmission_col) == "inherited") %>%
+			mutate(trans = !!sym(transmission_col) == inheritance_flag) %>%
 			dplyr::group_by(Size_Range) %>%
 			dplyr::summarise(n = dplyr::n(),
 											 MP = round(mean(trans, na.rm = TRUE), digits = 2),
@@ -297,17 +298,18 @@ mp_vs_metric_by_size <- function(ds, quality_metric, transmission_col) {
 	dplyr::bind_rows(res)
 }
 
-mp_vs_metric <- function(ds, quality_metric, transmission_col) {
+mp_vs_metric <- function(ds, quality_metric, transmission_col, 
+												 inheritance_flag = "True") {
 	
-	range_values <- range(ds %>% pull(all_of(quality_metric), as_vector = TRUE))
+	range_values <- range(ds %>% pull(all_of(quality_metric)))
 	rng_infos <- create_dynamic_ticks(range_values)
 	
 	res <- lapply(rng_infos$ticks, function(th) {
 		tmp <- ds %>% dplyr::filter(.data[[quality_metric]] >= th) 
-		n <- tmp %>% summarise(n()) %>% pull(as_vector = TRUE)
+		n <- tmp %>% summarise(n()) %>% pull()
 		if (n == 0) return(NULL)
 		tmp %>%
-			mutate(trans = !!sym(transmission_col) == "inherited") %>%
+			mutate(trans = !!sym(transmission_col) == inheritance_flag) %>%
 			dplyr::summarise(n = dplyr::n(),
 											 MP = round(mean(trans, na.rm = TRUE), digits = 2)) %>%
 			dplyr::mutate(Size_Range = "All", threshold = th) %>% collect()
@@ -333,10 +335,11 @@ plot_mp_vs_metric <- function(dt, title, subtitle, y_lab, x_lab){
 }
 
 
-mp_by_size <- function(ds, transmission_col) {
+mp_by_size <- function(ds, transmission_col, 
+											 inheritance_flag = "True") {
 	df %>%
 		dplyr::group_by(Size_Range) %>%
-		mutate(trans = !!sym(transmission_col) == "inherited") %>%
+		mutate(trans = !!sym(transmission_col) == inheritance_flag) %>%
 		dplyr::summarise(
 			n = dplyr::n(),
 			MP = round(mean(trans, na.rm = TRUE), digits = 2),
