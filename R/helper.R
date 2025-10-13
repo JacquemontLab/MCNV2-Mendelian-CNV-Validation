@@ -184,7 +184,7 @@ parse_cnv_size_value <- function(x) {
 	return(x)
 }
 
-create_dynamic_ticks <- function(range_values) {
+create_dynamic_ticks <- function(range_values, n_steps = 100) {
 	if (!is.numeric(range_values) || length(range_values) != 2) {
 		stop("range_values must be a numeric vector of length 2 (min, max).")
 	}
@@ -199,7 +199,7 @@ create_dynamic_ticks <- function(range_values) {
 	}
 	
 	diff_val <- max_val - min_val
-	raw_step <- diff_val / 100
+	raw_step <- diff_val / n_steps
 	
 	# base magnitude and candidate "nice" steps (1,2,5,10 * 10^k)
 	magnitude <- 10 ^ floor(log10(raw_step))
@@ -280,9 +280,9 @@ mp_vs_metric_by_size <- function(ds, quality_metric, transmission_col,
 																 inheritance_flag = "True") {
 	
 	range_values <- range(ds %>% pull(all_of(quality_metric)))
-	rng_infos <- create_dynamic_ticks(range_values)
+	rng_infos <- create_dynamic_ticks(range_values, n_steps = 20)
 
-	res <- lapply(rng_infos$ticks, function(th) {
+	res <- parallel::mclapply(X = rng_infos$ticks, FUN = function(th) {
 		tmp <- ds %>% dplyr::filter(.data[[quality_metric]] >= th) 
 		n <- tmp %>% summarise(n()) %>% pull()
 		
@@ -294,7 +294,7 @@ mp_vs_metric_by_size <- function(ds, quality_metric, transmission_col,
 											 MP = round(mean(trans, na.rm = TRUE), digits = 2),
 											 .groups = "drop") %>%
 			dplyr::mutate(threshold = th) %>% collect()
-	})
+	}, mc.cores = parallel::detectCores() - 1)
 	dplyr::bind_rows(res)
 }
 
@@ -302,9 +302,9 @@ mp_vs_metric <- function(ds, quality_metric, transmission_col,
 												 inheritance_flag = "True") {
 	
 	range_values <- range(ds %>% pull(all_of(quality_metric)))
-	rng_infos <- create_dynamic_ticks(range_values)
+	rng_infos <- create_dynamic_ticks(range_values, n_steps = 20)
 	
-	res <- lapply(rng_infos$ticks, function(th) {
+	res <- parallel::mclapply(X = rng_infos$ticks, FUN = function(th) {
 		tmp <- ds %>% dplyr::filter(.data[[quality_metric]] >= th) 
 		n <- tmp %>% summarise(n()) %>% pull()
 		if (n == 0) return(NULL)
@@ -313,7 +313,7 @@ mp_vs_metric <- function(ds, quality_metric, transmission_col,
 			dplyr::summarise(n = dplyr::n(),
 											 MP = round(mean(trans, na.rm = TRUE), digits = 2)) %>%
 			dplyr::mutate(Size_Range = "All", threshold = th) %>% collect()
-	})
+	}, mc.cores = parallel::detectCores() - 1)
 	dplyr::bind_rows(res)
 }
 
