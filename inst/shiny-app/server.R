@@ -8,6 +8,7 @@
 #
 
 library(shiny)
+library(datamods)
 
 options(shiny.maxRequestSize = Inf)  # No upload size limit
 options(arrow.pull_as_vector = TRUE)
@@ -31,7 +32,11 @@ function(input, output, session) {
 	annot_output_file <- reactiveVal(NULL)
 	inherit_output_file <- reactiveVal(NULL)
 	
+	quality_metrics <- reactiveVal(NULL)
 	filtered_ds <- reactiveVal(NULL) #arrow dataset to avoid loading file in memory
+	
+	baseline_DEL_plot <-  reactiveVal(NULL)
+	baseline_DUP_plot <-  reactiveVal(NULL)
 	
 	observeEvent(input$cnv_tsv, {
 		req(input$cnv_tsv)  # Attend que le fichier soit chargé
@@ -239,6 +244,7 @@ function(input, output, session) {
 			]
 			num_cols <- num_cols[!num_cols %in% internal_columns]
 			if(length(num_cols) > 0){
+				quality_metrics(num_cols)
 				updateSelectizeInput(inputId = "quality_metric", 
 														 choices = num_cols)
 			} else {
@@ -304,9 +310,9 @@ function(input, output, session) {
 		
 		outputs <- list(br(),
 										plotlyOutput(outputId = "plot_overview_del", 
-																 height = "500px"), hr(), 
+																 height = "500px", width = "100%"), hr(), 
 										plotlyOutput(outputId = "plot_overview_dup", 
-																 height = "500px"), hr())
+																 height = "500px", width = "100%"), hr())
 		
 		return(outputs)
 	})
@@ -376,7 +382,7 @@ function(input, output, session) {
 			
 			# update reactive filtered dataset
 			filtered_ds(filtered_dataset)
-
+			
 			
 			mp <- filtered_ds() %>% 
 				dplyr::select(cnv_id, Type, all_of(transmission_col)) %>%
@@ -434,7 +440,7 @@ function(input, output, session) {
 																 subtitle = "All filtered CNVs", 
 																 y_lab = "Mendelian Precision", 
 																 x_lab = paste0(quality_metric, " threshold (≥)"))
-					
+					baseline_DEL_plot(p)
 					ggplotly(p) 
 				} else {
 					NULL
@@ -457,29 +463,159 @@ function(input, output, session) {
 																 subtitle = "All filtered CNVs", 
 																 y_lab = "Mendelian Precision", 
 																 x_lab = paste0(quality_metric, " threshold (≥)"))
-					
+					baseline_DUP_plot(p)
 					ggplotly(p) 
 				} else {
 					NULL
 				}
 			}) 
+			#TODO: modify so the completion natification appears AFTER plots
 			showNotification("Plotting complete!", type = "message")
 			
 		})
 	})
 	
-	output$investigate_del <- renderUI({
+	output$filtered_tbl <- renderDataTable({
+		req(filtered_ds())
+		dat <- filtered_ds() %>% head(1000) %>% collect()
+		datatable(dat, options = list(scrollX = TRUE), rownames = FALSE)
+	})
+
+	output$ddl_filtered_tbl <- downloadHandler(
+		filename = function() {
+			paste0("MCNV2_filtered_data_", Sys.Date(), ".csv")
+		},
+		content = function(file) {
+			withProgress(
+				message = 'Preparing large dataset...',
+				detail = 'Please wait while we generate your TSV.',
+				value = 0, {
+					
+					incProgress(0.2, detail = "Collecting data...")
+					dat <- filtered_ds() %>% collect()
+					
+					incProgress(0.6, detail = "Writing TSV file...")
+					write.csv(dat, file, row.names = FALSE)
+					
+					incProgress(1, detail = "Done!")
+				}
+			)
+		}
+	)
+
+	output$test <- renderUI({
 		req(inherit_output_file())
-		req(input$quality_metric)
-		
-		plot_types <- c(
-			
-		)
+		req(quality_metrics())
 		outputs <- list()
 		
+		outputs[[length(outputs) + 1]] <- h4("Filters")
 		
+		outputs[[length(outputs) + 1]] <- updateSelectizeInput(inputId = "ftdel_quality_metric", 
+																													 choices = quality_metrics())
+		
+		# get range without loading the full file
+		dt <- data.table::fread(inherit_output_file(), 
+														select = input$ftdel_quality_metric, 
+														sep = "\t", showProgress = FALSE)
+		range_values <- range(dt[[input$quality_metric]], na.rm = TRUE)
+		
+		if(is.numeric(range_values)){
+			rng_infos <- create_dynamic_ticks(range_values)
+			outputs[[length(outputs) + 1]] <- tagList(fluidRow(
+				column(4,
+							 numericInput("ftdel_quality_metric_min", "Min:", value = rng_infos$min, 
+							 						 min = rng_infos$min, max = rng_infos$max, 
+							 						 width = "100%")
+				),
+				column(4,
+							 numericInput("ftdel_quality_metric_max", "Max:", value = rng_infos$max, 
+							 						 min = rng_infos$min, max = rng_infos$max, 
+							 						 width = "100%")
+				),
+				column(4,
+							 actionButton(inputId = "add_filter_ftdel", 
+							 						 label = "Apply filters", 
+							 						 icon = icon("square-plus"))
+				)
+			))
+		}
+		
+		outputs[[length(outputs) + 1]] <- verbatimTextOutput(outputId = "display_filter_ftdel")
+		
+		outputs[[length(outputs) + 1]] <- actionButton(inputId = "apply_ftdel", 
+																									 label = "Apply filters", 
+																									 icon = icon("filter"))
+		outputs[[length(outputs) + 1]] <- fluidRow(
+			column(6, plotlyOutput(outputId = "plot_ftdel_baseline_del",  
+														 height = "500px")),
+			column(6, plotlyOutput(outputId = "plot_ftdel_filtered_del", 
+														 height = "500px"))
+		)
 		
 		return(outputs)
 	})
 	
+	observeEvent(input$add_filter_ftdel, {
+
+		output$preproc_tsv_status <- renderText(paste0(input$ftdel_quality_metric,"_",
+																									 input$ftdel_quality_metric_min,"_",
+																									 input$ftdel_quality_metric_max))
+		
+	})
+	
+	output$finetune_del <- renderUI({
+		req(filtered_ds())
+		
+		tagList(
+			h4("Filter data with select group module"),
+			shinyWidgets::panel(
+				select_group_ui(
+					id = "ftdel_filters",
+					params = lapply(X = quality_metrics(), 
+													FUN = function(n) { list(inputId = n, label = paste0(n,":")) }), 
+					inline = FALSE,
+					btn_reset_label = "Reset filters",
+					vs_args = list(disableSelectAll = FALSE)
+				),
+				status = "primary"
+			), actionButton("lol", "lol")
+		)
+		
+	})
+
+	output$finetune_dup <- renderUI({
+		req(filtered_ds())
+		
+		tagList(
+			h4("Filter data with select group module"),
+			shinyWidgets::panel(
+				select_group_ui(
+					id = "ftdup_filters",
+					params = lapply(X = quality_metrics(), 
+													FUN = function(n) { list(inputId = n, label = paste0(n,":")) }), 
+					inline = FALSE,
+					btn_reset_label = "Reset filters",
+					vs_args = list(disableSelectAll = FALSE)
+				),
+				status = "primary"
+			), actionButton("lol2", "lol")
+		)
+		
+	})
+	
+	
+	# res_mod <- select_group_server(
+	# 	id = "my-filters",
+	# 	data = filtered_ds(),
+	# 	vars = quality_metrics()
+	# )
+	# 
+	# output$table <- reactable::renderReactable({
+	# 	reactable::reactable(res_mod())
+	# })
+	# 
+	# output$inputs <- renderPrint({
+	# 	attr(res_mod(), "inputs")
+	# })
+	# 	
 }

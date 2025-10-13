@@ -36,8 +36,16 @@ sidebar <- dashboardSidebar(
 	sidebarMenu(
 		id = "tabs", 
 		menuItem("Preprocessing", tabName = "prepocessing", icon = icon("users-gear")),
-		menuItem("MP Exploration", icon = icon("chart-line"), tabName = "mp_exploration"),
-		menuItem("De novo Analysis", icon = icon("magnifying-glass-chart"), tabName = "denovo_analysis")
+		menuItem("MP Exploration", tabName = "mp_exploration", icon = icon("chart-line")),
+		menuItem("Fine-tuning", tabName = "fine_tuning", icon = icon("filter"), 
+						 menuSubItem("Deletions", tabName = "finemap_del",
+						 						icon = shiny::icon("square-minus")
+						 ),
+						 menuSubItem(
+						 	"Duplications", tabName = "finemap_dup",
+						 	icon = shiny::icon("square-plus")
+						 )
+		)	 
 	)
 )
 
@@ -159,11 +167,6 @@ body <- dashboardBody(
 								hr(),
 								h4("Gene-level exlusion criteria"),
 								fileInput("exclus_genes", label = "Exclusion list (Ensembl Gene IDs)"),
-								# tags$div(class = "inline",
-								# 				 numericInput(inputId = "loeuf_cutoff", 
-								# 				 						 label = "Exclude genes with LOEUF ≤ ", 
-								# 				 						 min = 0, max = 1, step = 0.1, value = 0.6)
-								# ),
 								hr(),
 								h4("MP representation"),
 								helpText("Choose a quantitative variable to use as a variable threshold"),
@@ -184,20 +187,11 @@ body <- dashboardBody(
 																 						tabPanel("Overview",
 																 										 uiOutput("plots_overview")
 																 						),
-																 						tabPanel("Fine-tune deletions", 
-																 										 uiOutput("investigate_del")
-																 										 ),
-																 						tabPanel("Plot DUP", plotOutput("plot_dup", height = 600)),
-																 						tabPanel("Filtered table", DTOutput("tbl")),
-																 						tabPanel("De novo & biomaRt",
-																 										 fluidRow(
-																 										 	column(6, DTOutput("dnv_tbl")),
-																 										 	column(6,
-																 										 				 h5("Selection: locus & genes (biomaRt)"),
-																 										 				 verbatimTextOutput("selected_locus"),
-																 										 				 tableOutput("biomart_hits")
-																 										 	)
-																 										 )
+																 						tabPanel("Filtered table",
+																 										 h4("Preview"),
+																 										 DTOutput("filtered_tbl"),
+																 										 downloadButton("ddl_filtered_tbl", 
+																 										 							 "Download CSV")
 																 						)
 																 )
 								),
@@ -205,11 +199,39 @@ body <- dashboardBody(
 							)
 						)
 		),
-		
-		tabItem(tabName = "denovo_analysis",
-						h3("De Novo Analysis"),
-						helpText("HELP"),
-						br()
+		tabItem(tabName = "finemap_del",
+						h3("Fine tuning for DEL"),
+						helpText("Fine-tune your filters to maximize the MP curve for deletions."),
+						br(),
+						sidebarLayout(
+							sidebarPanel( 
+								uiOutput("finetune_del"),
+								width = 4
+							),
+							mainPanel(
+								conditionalPanel(condition = "input.lol > 0",
+																 h3("LOL")
+																 ),
+								width = 8              
+							)
+						)
+		),
+		tabItem(tabName = "finemap_dup",
+						h3("Fine tuning for DUP"),
+						helpText("Fine-tune your filters to maximize the MP curve for duplications."),
+						br(),
+						sidebarLayout(
+							sidebarPanel( 
+								uiOutput("finetune_dup"),
+								width = 4
+							),
+							mainPanel(
+								conditionalPanel(condition = "input.lol2 > 0",
+																 h3("LOL")
+								),
+								width = 8              
+							)
+						)
 		)
 	)
 )
