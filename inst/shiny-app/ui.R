@@ -93,7 +93,7 @@ body <- dashboardBody(
 								fileInput("prb_tsv", label = "Problematic regions (optional, BED)"),
 								verbatimTextOutput("prb_tsv_status"),
 								hr(),
-								h4("Parameters"),
+								h4("Parameters for inheritance calculation"),
 								selectInput("build", label = "Genome build",
 														choices = list("GRCh38/hg38" = 38, "GRCh37/hg19" = 37),
 														selected = 38),
@@ -104,7 +104,7 @@ body <- dashboardBody(
 								div(class = "outdir-box", verbatimTextOutput("outdir_display")),
 								actionButton("submit_preprocess", label = "Submit",
 														 icon = icon("gear"), disabled = TRUE),
-								width = 4
+								width = 3
 							),
 							mainPanel(
 								conditionalPanel(condition = "input.submit_preprocess > 0",
@@ -130,7 +130,7 @@ body <- dashboardBody(
 																 					 														 disabled = TRUE), 
 																 					 								style = "success")
 																 )),
-								width = 8              
+								width = 9              
 							)
 						)
 		),
@@ -153,10 +153,6 @@ body <- dashboardBody(
 														 selected = 1, inline = TRUE),
 								hr(),
 								h4("CNV-level inclusion criteria"),
-								sliderInput("min_exon_ov", "Min. % of disrupted exons",
-														min = 0, max = 100, value = 0, step = 10),
-								sliderInput("min_transcript_ov", "Min. % transcript overlap",
-														min = 0, max = 100, value = 0, step = 10),
 								sliderTextInput(
 									inputId = "cnv_range",
 									label = "CNV size (bp):",
@@ -164,6 +160,12 @@ body <- dashboardBody(
 									selected = c("1", ">1Mb"),
 									grid = TRUE
 								),
+								sliderInput("min_exon_ov", "Min. % of disrupted exons",
+														min = 0, max = 100, value = 90, step = 5),
+								sliderInput("min_transcript_ov", "Min. % transcript overlap",
+														min = 0, max = 100, value = 90, step = 5),
+								sliderInput("max_prb_region_ov", "Max. % problematic regions overlap",
+														min = 0, max = 100, value = 30, step = 5),
 								hr(),
 								h4("Gene-level exlusion criteria"),
 								fileInput("exclus_genes", label = "Exclusion list (Ensembl Gene IDs)"),
@@ -175,7 +177,7 @@ body <- dashboardBody(
 								uiOutput("qty_metric_range_ui"),
 								actionButton("submit_mpviz", label = "Apply filters",
 														 icon = icon("gear"), disabled = FALSE),
-								width = 4
+								width = 3
 								
 							),
 							mainPanel(
@@ -195,7 +197,7 @@ body <- dashboardBody(
 																 						)
 																 )
 								),
-								width = 8
+								width = 9
 							)
 						)
 		),
@@ -206,13 +208,13 @@ body <- dashboardBody(
 						sidebarLayout(
 							sidebarPanel( 
 								uiOutput("finetune_del"),
-								width = 4
+								width = 3
 							),
 							mainPanel(
 								conditionalPanel(condition = "input.lol > 0",
 																 h3("LOL")
 																 ),
-								width = 8              
+								width = 9              
 							)
 						)
 		),

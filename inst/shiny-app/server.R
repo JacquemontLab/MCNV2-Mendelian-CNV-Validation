@@ -586,20 +586,15 @@ function(input, output, session) {
 	output$finetune_dup <- renderUI({
 		req(filtered_ds())
 		
-		tagList(
-			h4("Filter data with select group module"),
-			shinyWidgets::panel(
-				select_group_ui(
-					id = "ftdup_filters",
-					params = lapply(X = quality_metrics(), 
-													FUN = function(n) { list(inputId = n, label = paste0(n,":")) }), 
-					inline = FALSE,
-					btn_reset_label = "Reset filters",
-					vs_args = list(disableSelectAll = FALSE)
-				),
-				status = "primary"
-			), actionButton("lol2", "lol")
-		)
+		lapply(quality_metrics(), function(col) {
+			col_vals <- filtered_ds()[[col]]
+			rng <- range(col_vals, na.rm = TRUE)
+			
+			fluidRow(
+				column(6, numericInput(paste0("min_", col), paste("Min", col), value = rng[1])),
+				column(6, numericInput(paste0("max_", col), paste("Max", col), value = rng[2]))
+			)
+		})
 		
 	})
 	
