@@ -1,97 +1,102 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import argparse
 import polars as pl
 import subprocess
 import tempfile
 import shutil
 import sys
+import os
 
 """
-CNV-Gene Intersection Database Builder (STOP au lieu de End, prob_regions partout, sans filtre Region)
-
-- CNV : on prend toujours les 3 premières colonnes comme (Chr, Start, STOP), avec/sans en-tête.
-- Toutes les autres colonnes CNV sont conservées telles quelles dans la sortie.
-- prob_regions : on lit le fichier passé via --prob_regions.
-  * en-tête ou non : on détecte Chr/Start/(End|STOP) ; sinon on prend les 3 premières colonnes.
-  * si 'GenomeVersion' existe (casse ignorée), on filtre en acceptant les alias:
-      --genome_version ∈ {GRCh38, GRCh37, hg19, hg38, 19, 38} (casse ignorée).
-    Sinon: WARNING et pas de filtre (on utilise toutes les lignes).
-  * on ignore toute colonne 'Region' (aucun filtre dessus).
-- bedtools : intersections sur les BED 3 colonnes (Chr, Start, STOP) du run en tmpdir.
-- pRegions : on calcule la fraction d'overlap, puis on prend le MAX par (Chr, Start, STOP).
-- Join final sur (Chr, Start, STOP).
+CNV–Gene Intersection DB (Polars, robust)
+- CNV input: first 5 columns are positionally mapped to Chr, Start, Stop, Type, SampleID (renamed exactly like this).
+- All remaining CNV columns are kept as-is and appear after those 5 columns.
+- gene_resource: 4 cols (chrom, start, end, attributes with GTF-like key="value"; ...).
+- prob_regions: TSV/BED (with/without header); optional GenomeVersion filter; no Region filter.
+- Output column order:
+  [Chr, Start, Stop, Type, SampleID] + [other CNV columns] + [
+     t_Start, t_End, transcript_length,
+     gene_id, gene_name, gene_type, transcript_id, transcript_name,
+     bp_overlap, cnv_problematic_region_overlap
+  ]
 """
 
-def _ci_lookup(cols, wanted):
-    w = wanted.lower()
-    for c in cols:
-        if c.lower() == w:
-            return c
-    return None
+GENE_REGION_COLUMNS = [
+    "t_Start", "t_End", "transcript_length",
+    "gene_id", "gene_name", "gene_type", "transcript_id", "transcript_name",
+    "bp_overlap", "cnv_problematic_region_overlap",
+]
+
+GENE_REGION_DTYPES = {
+    "t_Start": pl.Int64,
+    "t_End": pl.Int64,
+    "transcript_length": pl.Int64,
+    "gene_id": pl.Utf8,
+    "gene_name": pl.Utf8,
+    "gene_type": pl.Utf8,
+    "transcript_id": pl.Utf8,
+    "transcript_name": pl.Utf8,
+    "bp_overlap": pl.Int64,
+    "cnv_problematic_region_overlap": pl.Float64,
+}
 
 def _normalize_gv_arg(gv: str) -> str:
-    """
-    Normalise l'argument genome_version en un canon court:
-    - '38' pour {GRCh38, hg38, 38}
-    - '37' pour {GRCh37, hg19, 19}
-    """
     s = (gv or "").strip().lower()
     if "grch38" in s or "hg38" in s or s == "38":
         return "38"
-    if "grch37" in s or "hg19" in s or s == "19" or s == "37":
+    if "grch37" in s or "hg19" in s or s in {"19", "37"}:
         return "37"
     digits = "".join(ch for ch in s if ch.isdigit())
     if digits == "38":
         return "38"
     if digits in {"37", "19"}:
         return "37"
-    # défaut raisonnable
     return "38"
 
 def _pattern_for_gv(norm: str) -> str:
-    """Regex (lowercase) pour matcher les valeurs de GenomeVersion."""
-    if norm == "38":
-        return r"(grch38|hg38|38)"
-    return r"(grch37|hg19|37|19)"
+    return r"(grch38|hg38|38)" if norm == "38" else r"(grch37|hg19|37|19)"
 
-def _load_cnv_any_header(path: str) -> pl.LazyFrame:
+def _load_cnv_positional(path: str) -> pl.LazyFrame:
     """
-    Charge un TSV CNV (avec/sans en-tête). On prend les 3 premières colonnes
-    comme Chr, Start, STOP (cast Start/STOP en int). On conserve toutes les colonnes d'origine.
+    Read CNV table (TSV). Regardless of header/names, the FIRST FIVE columns
+    are mapped to Chr, Start, Stop, Type, SampleID. Remaining columns are kept.
     """
-    # essai avec header
-    lf = pl.scan_csv(path, separator="\t", has_header=True)
-    cols = lf.collect_schema().names()
-    header_looks_fake = any(c.startswith("column_") for c in cols[:min(3, len(cols))])
-
-    if header_looks_fake:
-        # relire sans header
+    try:
+        lf = pl.scan_csv(path, separator="\t", has_header=True)
+        cols = lf.collect_schema().names()
+        if len(cols) < 5:
+            raise ValueError
+        c1, c2, c3, c4, c5 = cols[0], cols[1], cols[2], cols[3], cols[4]
+    except Exception:
         lf = pl.scan_csv(path, separator="\t", has_header=False)
         cols = lf.collect_schema().names()
+        if len(cols) < 5:
+            raise ValueError("CNV file must have at least 5 columns (Chr, Start, Stop, Type, SampleID).")
+        c1, c2, c3, c4, c5 = cols[0], cols[1], cols[2], cols[3], cols[4]
 
-    if len(cols) < 3:
-        raise ValueError("Le fichier CNV doit contenir au moins 3 colonnes (Chr, Start, STOP).")
-
-    c1, c2, c3 = cols[0], cols[1], cols[2]
+    other_cols = cols[5:]
 
     lf = (
-        lf.with_columns([
-            pl.col(c1).alias("Chr"),
-            pl.col(c2).cast(pl.Int64, strict=False).alias("Start"),
-            pl.col(c3).cast(pl.Int64, strict=False).alias("STOP"),
-        ])
-        .drop_nulls(["Start", "STOP"])
+        lf.select(
+            [
+                pl.col(c1).alias("Chr"),
+                pl.col(c2).cast(pl.Int64, strict=False).alias("Start"),
+                pl.col(c3).cast(pl.Int64, strict=False).alias("Stop"),
+                pl.col(c4).cast(pl.Utf8,  strict=False).alias("Type"),
+                pl.col(c5).cast(pl.Utf8,  strict=False).alias("SampleID"),
+            ] + [pl.col(c) for c in other_cols]
+        )
+        .drop_nulls(["Start", "Stop"])
     )
     return lf
 
 def _load_prob_regions_flex(path: str, genome_version: str) -> pl.LazyFrame:
     """
-    Lit --prob_regions (TSV/BED) avec ou sans en-tête.
-    - Si en-tête : détecte Chr/Start/(End|STOP).
-      * Si 'GenomeVersion' (casse ignorée) existe -> filtre par alias de --genome_version.
-      * Sinon -> WARNING et PAS de filtre (on garde toutes les lignes).
-    - Si pas d'en-tête : colonnes 1..3 = Chr, Start, STOP.
-    Retourne un LazyFrame avec colonnes normalisées Chr, Start, STOP (int).
+    Read prob_regions (TSV/BED) with/without header.
+    - If header: try to find Chr/Start/End|Stop; if GenomeVersion exists, filter by alias.
+    - If no header: first 3 columns are Chr, Start, Stop.
     """
     norm = _normalize_gv_arg(genome_version)
     pattern = _pattern_for_gv(norm)
@@ -102,139 +107,179 @@ def _load_prob_regions_flex(path: str, genome_version: str) -> pl.LazyFrame:
         if len(cols) < 3:
             raise ValueError
 
-        chr_col   = _ci_lookup(cols, "Chr")   or cols[0]
-        start_col = _ci_lookup(cols, "Start") or cols[1]
-        # accepter End ou STOP
-        stop_col  = _ci_lookup(cols, "STOP") or _ci_lookup(cols, "End") or cols[2]
+        def pick(name_opts, fallback):
+            for opt in name_opts:
+                for c in cols:
+                    if c.lower() == opt:
+                        return c
+            return fallback
 
-        gv_col = _ci_lookup(cols, "GenomeVersion")
+        chr_col   = pick(["chr", "chrom", "chromosome", "contig"], cols[0])
+        start_col = pick(["start", "pos", "begin", "position"],    cols[1])
+        end_col   = pick(["stop", "end", "stoppos", "endpos"],     cols[2])
+
+        gv_col = next((c for c in cols if c.lower() == "genomeversion"), None)
         if gv_col:
-            # filtre par alias (regex, insensible à la casse via to_lowercase)
             lf = lf.filter(pl.col(gv_col).cast(pl.Utf8).str.to_lowercase().str.contains(pattern))
         else:
-            print(
-                f"[WARN] 'GenomeVersion' absente dans {path}. "
-                f"Aucun filtrage appliqué : toutes les lignes de regions seront utilisées.",
-                file=sys.stderr
-            )
+            print(f"[WARN] 'GenomeVersion' not found in {path}. No genome-version filtering.", file=sys.stderr)
 
         lf = (
             lf.select([
                 pl.col(chr_col).alias("Chr"),
                 pl.col(start_col).cast(pl.Int64, strict=False).alias("Start"),
-                pl.col(stop_col).cast(pl.Int64, strict=False).alias("STOP"),
+                pl.col(end_col).cast(pl.Int64, strict=False).alias("Stop"),
             ])
-            .drop_nulls(["Start", "STOP"])
+            .drop_nulls(["Start", "Stop"])
         )
         return lf
 
     except Exception:
-        # pas d'en-tête fiable -> 3 premières colonnes
         lf = pl.scan_csv(path, separator="\t", has_header=False)
         return (
             lf.select([
                 pl.col("column_1").alias("Chr"),
                 pl.col("column_2").cast(pl.Int64, strict=False).alias("Start"),
-                pl.col("column_3").cast(pl.Int64, strict=False).alias("STOP"),
+                pl.col("column_3").cast(pl.Int64, strict=False).alias("Stop"),
             ])
-            .drop_nulls(["Start", "STOP"])
+            .drop_nulls(["Start", "Stop"])
         )
 
+def _finalize_order(joined: pl.LazyFrame | pl.DataFrame, cnv_cols_after_norm: list[str]) -> pl.DataFrame:
+    """
+    Output order:
+      1) Chr, Start, Stop, Type, SampleID
+      2) other CNV columns (original CNV order), excluding the 5 fixed ones
+      3) hard-coded gene/region columns (created if missing)
+    """
+    front = ["Chr", "Start", "Stop", "Type", "SampleID"]
+    lf = joined.lazy() if isinstance(joined, pl.DataFrame) else joined
+    existing = set(lf.collect_schema().names())
+
+    cnv_extras = [c for c in cnv_cols_after_norm if c not in set(front)]
+
+    add_exprs = []
+    for col in GENE_REGION_COLUMNS:
+        if col not in existing:
+            add_exprs.append(pl.lit(None, dtype=GENE_REGION_DTYPES.get(col, pl.Utf8)).alias(col))
+    if add_exprs:
+        lf = lf.with_columns(add_exprs)
+
+    selects = [pl.col(c) for c in front]
+    selects += [pl.col(c) for c in cnv_extras if c in existing]
+    selects += [
+        pl.col(col).cast(GENE_REGION_DTYPES.get(col, pl.Utf8), strict=False).alias(col)
+        for col in GENE_REGION_COLUMNS
+    ]
+    return lf.select(selects).collect()
+
 def main():
-    parser = argparse.ArgumentParser(description="Build CNV-gene intersection database (STOP + prob_regions partout, sans filtre Region)")
-    parser.add_argument("--cnv", help="Path to CNV input TSV", required=True)
-    parser.add_argument("--gene_resource", help="Path to gene resource file (BED/TSV)", required=True)
-    parser.add_argument("--out", default="data/cnv_geneDB.tsv",
-                        help="Output path for CNV-gene database (default: data/cnv_geneDB.tsv)")
-    parser.add_argument("--genome_version", default="GRCh38",
-                        help="Genome version alias: GRCh38, GRCh37, hg19, hg38, 19, 38 (case-insensitive)")
-    parser.add_argument("--prob_regions", required=True, help="Path to problematic_regions TSV/BED")
-    parser.add_argument("--bedtools_path", default="bedtools",
-                        help="Absolute path to bedtools executable")
+    parser = argparse.ArgumentParser(
+        description="Build CNV–gene intersection DB with fixed front columns (Chr, Start, Stop, Type, SampleID) and hard-coded gene columns."
+    )
+    parser.add_argument("--cnv", required=True, help="CNV TSV. First five columns are Chr, Start, Stop, Type, SampleID (positional).")
+    parser.add_argument("--gene_resource", required=True, help="Gene resource: 4 columns [chrom, start, end, attributes] (GTF-like).")
+    parser.add_argument("--prob_regions", required=True, help="Problematic regions TSV/BED (with/without header).")
+    parser.add_argument("--genome_version", default="GRCh38", help="Genome alias among GRCh38, GRCh37, hg19, hg38, 19, 38.")
+    parser.add_argument("--bedtools_path", default="bedtools", help="Absolute path to bedtools executable")
+    parser.add_argument("--out", default="data/cnv_geneDB.tsv", help="Output TSV (default: data/cnv_geneDB.tsv)")
     args = parser.parse_args()
 
-    # CNV (flex) + pRegions (flex)
-    cnvDB = _load_cnv_any_header(args.cnv)
+    # CNV
+    cnvLF = _load_cnv_positional(args.cnv)  # Chr, Start, Stop, Type, SampleID + extras
+    cnv_cols_after_norm = cnvLF.collect_schema().names()
+
+    # prob_regions
     pRegions = _load_prob_regions_flex(args.prob_regions, args.genome_version)
 
     tmpdir = tempfile.mkdtemp()
     try:
-        # CNVs -> BED (3 colonnes)
-        cnv_bed = f"{tmpdir}/tmp_cnvs.bed"
-        cnvDB.select(["Chr", "Start", "STOP"]).unique().sink_csv(
-            cnv_bed, separator="\t", include_header=False
-        )
+        # Write 3-col BEDs for bedtools
+        cnv_bed = os.path.join(tmpdir, "tmp_cnvs.bed")
+        cnvLF.select(["Chr", "Start", "Stop"]).unique().sink_csv(cnv_bed, separator="\t", include_header=False)
 
-        # pRegions -> BED (3 colonnes)
-        pRegions_bed = f"{tmpdir}/tmp_pRegions.bed"
-        pRegions.select(["Chr", "Start", "STOP"]).sink_csv(
-            pRegions_bed, separator="\t", include_header=False
-        )
+        pRegions_bed = os.path.join(tmpdir, "tmp_pRegions.bed")
+        pRegions.select(["Chr", "Start", "Stop"]).sink_csv(pRegions_bed, separator="\t", include_header=False)
 
-        # Intersect CNV x Genes
-        inter_bed = f"{tmpdir}/tmp_intersect.bed"
-        subprocess.run(
-            f"{args.bedtools_path} intersect -a {cnv_bed} -b {args.gene_resource} -F 0.1 -wao > {inter_bed}",
-            shell=True, check=True
-        )
+        # bedtools: CNV × Genes
+        inter_bed = os.path.join(tmpdir, "tmp_intersect.bed")
+        with open(inter_bed, "w") as fout:
+            subprocess.run(
+                ["bedtools", "intersect", "-a", cnv_bed, "-b", args.gene_resource, "-F", "0.1", "-wao"],
+                check=True, stdout=fout
+            )
 
-        # Intersect CNV x pRegions
-        preg_inter_bed = f"{tmpdir}/tmp_pRegion_intersect.bed"
-        subprocess.run(
-            f"{args.bedtools_path} intersect -a {cnv_bed} -b {pRegions_bed} -wao > {preg_inter_bed}",
-            shell=True, check=True
-        )
+        # bedtools: CNV × prob_regions
+        preg_inter_bed = os.path.join(tmpdir, "tmp_pRegion_intersect.bed")
+        with open(preg_inter_bed, "w") as fout:
+            subprocess.run(
+                ["bedtools", "intersect", "-a", cnv_bed, "-b", pRegions_bed, "-wao"],
+                check=True, stdout=fout
+            )
 
-        # Colonnes de l'intersect gènes (identiques à l’original, STOP au lieu de End)
-        input_columns = [
-            pl.col("column_1").alias("Chr"),
-            pl.col("column_2").alias("Start"),
-            pl.col("column_3").alias("STOP"),
-            pl.col("column_5").alias("t_Start"),
-            pl.col("column_6").alias("t_End"),
-            pl.col("column_8").alias("gene_type"),
-            pl.col("column_9").alias("transcript"),
-            pl.col("column_10").alias("gene_name"),
-            pl.col("column_12").alias("LOEUF"),
-            pl.col("column_13").alias("bp_overlap"),
-        ]
-
+        # Parse CNV × Genes (B has 4 columns: chrom, start, end, attributes)
+        lf_inter = pl.scan_csv(inter_bed, separator="\t", has_header=False)
         intersected_genes = (
-            pl.scan_csv(inter_bed, separator="\t", has_header=False)
-              .select(input_columns)
-              .with_columns(
-                  (pl.col(c).replace([".", "NA"], None) for c in ["gene_type","gene_name","transcript","LOEUF"])
-              )
-              .with_columns(
+            lf_inter
+              .select([
+                  pl.col("column_1").alias("Chr"),
+                  pl.col("column_2").cast(pl.Int64, strict=False).alias("Start"),
+                  pl.col("column_3").cast(pl.Int64, strict=False).alias("Stop"),
+                  pl.col("column_5").cast(pl.Int64, strict=False).alias("t_Start"),
+                  pl.col("column_6").cast(pl.Int64, strict=False).alias("t_End"),
+                  pl.col("column_7").cast(pl.Utf8,   strict=False).alias("attrs"),
+                  pl.col("column_8").cast(pl.Int64,  strict=False).alias("bp_overlap"),
+              ])
+              # extract directly from 'attrs' without creating 'attrs_norm'
+              .with_columns([
+                  pl.col("attrs").fill_null("").cast(pl.Utf8).alias("attrs"),
+              ])
+              .with_columns([
+                  pl.col("attrs").str.replace_all('""', '"').alias("attrs_clean"),
+              ])
+              .with_columns([
+                  pl.col("attrs_clean").str.strip_chars('"').alias("attrs_clean"),
+                  pl.col("attrs_clean").str.extract(r'gene_id\s+"([^"]+)"').alias("gene_id"),
+                  pl.col("attrs_clean").str.extract(r'transcript_id\s+"([^"]+)"').alias("transcript_id"),
+                  pl.col("attrs_clean").str.extract(r'gene_type\s+"([^"]+)"').alias("gene_type"),
+                  pl.col("attrs_clean").str.extract(r'gene_name\s+"([^"]+)"').alias("gene_name"),
+                  pl.col("attrs_clean").str.extract(r'transcript_name\s+"([^"]+)"').alias("transcript_name"),
                   (pl.col("t_End") - pl.col("t_Start")).alias("transcript_length"),
-                  pl.col("LOEUF").cast(pl.Float64).alias("LOEUF"),
-              )
+              ])
+              # don't drop aggressively; we'll select final columns later
         )
 
-        # pRegions overlap fraction, puis MAX par CNV (Chr, Start, STOP)
-        p_region_columns = [
-            pl.col("column_1").alias("Chr"),
-            pl.col("column_2").alias("Start"),
-            pl.col("column_3").alias("STOP"),
-            pl.col("column_7").alias("bp_overlap"),
-        ]
+        # Materialize to avoid lazy planning quirks
+        intersected_genes_df = intersected_genes.collect()
+
+        # Parse CNV × prob_regions; compute max fraction per CNV
+        lf_preg = pl.scan_csv(preg_inter_bed, separator="\t", has_header=False)
         cnvs_with_pRegion = (
-            pl.scan_csv(preg_inter_bed, separator="\t", has_header=False)
-              .select(p_region_columns)
-              .with_columns(
-                  (pl.col("bp_overlap") / (pl.col("STOP") - pl.col("Start") + 1))
+            lf_preg
+              .select([
+                  pl.col("column_1").alias("Chr"),
+                  pl.col("column_2").cast(pl.Int64, strict=False).alias("Start"),
+                  pl.col("column_3").cast(pl.Int64, strict=False).alias("Stop"),
+                  pl.col("column_7").cast(pl.Int64, strict=False).alias("bp_overlap"),
+              ])
+              .with_columns([
+                  (pl.col("bp_overlap") / (pl.col("Stop") - pl.col("Start") + 1.0))
                   .alias("cnv_problematic_region_overlap")
-              )
-              .group_by(["Chr", "Start", "STOP"])
+              ])
+              .group_by(["Chr", "Start", "Stop"])
               .agg(pl.max("cnv_problematic_region_overlap").alias("cnv_problematic_region_overlap"))
         )
+        cnvs_with_pRegion_df = cnvs_with_pRegion.collect()
 
-        # Join final sur (Chr, Start, STOP)
-        (
-            cnvDB.join(intersected_genes, on=["Chr", "Start", "STOP"], how="left")
-                 .join(cnvs_with_pRegion, on=["Chr", "Start", "STOP"], how="left")
-                 .sink_csv(args.out, separator="\t")
+        # Join & finalize order (use the materialized DataFrames converted back to Lazy)
+        joined = (
+            cnvLF
+              .join(intersected_genes_df.lazy(), on=["Chr", "Start", "Stop"], how="left")
+              .join(cnvs_with_pRegion_df.lazy(),  on=["Chr", "Start", "Stop"], how="left")
         )
+
+        final_df = _finalize_order(joined, cnv_cols_after_norm)
+        final_df.write_csv(args.out, separator="\t")
 
     finally:
         shutil.rmtree(tmpdir)
