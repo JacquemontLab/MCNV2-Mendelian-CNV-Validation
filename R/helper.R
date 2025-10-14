@@ -142,16 +142,28 @@ annotate <- function(cnvs_file, prob_regions_file, output_file,
 																		"gene_resources.tsv", 
 																		package = "MCNV2")
 	
-	cmd = paste("python3", gene_annotation_script, 
-							"--cnv", cnvs_file,
-							"--gene_resource", gene_resource_file, 
-							"--prob_regions", prob_regions_file,
-							"--out", output_file, 
-							"--genome_version", genome_version, 
-							"--bedtools_path", bedtools_path)
-	ret <- system(command = cmd, intern = FALSE)
+	args <- c(
+		gene_annotation_script,
+		"--cnv", cnvs_file,
+		"--gene_resource", gene_resource_file,
+		"--prob_regions", prob_regions_file,
+		"--out", output_file,
+		"--genome_version", genome_version,
+		"--bedtools_path", bedtools_path
+	)
 	
-	return(ret)
+	ret <- system2(
+		command = reticulate::py_exe(),  # ex: ~/.virtualenvs/r-MCNV2/bin/python
+		args = args, 
+		stdout = TRUE,  # capture stdout si tu veux l'afficher
+		stderr = TRUE
+	)
+	
+	if(!file.exists(output_file)){
+		return(1)
+	} else {
+		return(0)
+	}
 }
 
 #' @export
@@ -161,15 +173,26 @@ compute_inheritance <- function(cnvs_file, pedigree_file, output_file,
 	compute_inheritance_script <- system.file("python", "compute_inheritance.py", 
 																				package = "MCNV2")
 	
-	cmd = paste("python3", compute_inheritance_script, 
-							"--cnv_geneAnnot", cnvs_file,
-							"--pedigree", pedigree_file, 
-							"--output", output_file, 
-							"--overlap", overlap)
+	args <- c(
+		compute_inheritance_script, 
+		"--cnv_geneAnnot", cnvs_file,
+		"--pedigree", pedigree_file, 
+		"--output", output_file, 
+		"--overlap", overlap
+	)
 	
-	ret <- system(command = cmd, intern = FALSE)
+	ret <- system2(
+		command = reticulate::py_exe(),  # ex: ~/.virtualenvs/r-MCNV2/bin/python
+		args = args, 
+		stdout = TRUE, 
+		stderr = TRUE
+	)
 	
-	return(ret)
+	if(!file.exists(output_file)){
+		return(1)
+	} else {
+		return(0)
+	}
 }
 
 parse_cnv_size_value <- function(x) {
