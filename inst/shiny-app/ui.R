@@ -144,6 +144,7 @@ body <- dashboardBody(
 														 selected = 1, inline = TRUE),
 								hr(),
 								h4("CNV-level inclusion criteria"),
+								helpText("Only CNVs passing filters will be used for the MP calculation."),
 								sliderTextInput(
 									inputId = "cnv_range",
 									label = "CNV size (bp):",
@@ -151,15 +152,17 @@ body <- dashboardBody(
 									selected = c("1", ">1Mb"),
 									grid = TRUE
 								),
-								sliderInput("min_exon_ov", "Min. % of disrupted exons",
-														min = 0, max = 100, value = 0, step = 5),
 								sliderInput("min_transcript_ov", "Min. % transcript overlap",
 														min = 0, max = 100, value = 0, step = 5),
 								sliderInput("max_prb_region_ov", "Max. % problematic regions overlap",
 														min = 0, max = 100, value = 100, step = 5),
 								hr(),
 								h4("Gene-level exlusion criteria"),
+								helpText("CNVs containing excluded genes (based on genes list and/or LOEUF threshold) will be excluded from the MP calculation."),
 								fileInput("exclus_genes", label = "Exclusion list (Ensembl Gene IDs)"),
+								verbatimTextOutput("exclus_genes_status"),
+								sliderInput("min_loeuf", "Exclude genes with LOEUF <",
+														min = 0, max = 1, value = 0, step = .1),
 								hr(),
 								h4("MP representation"),
 								radioButtons("plot_type", "Plot type",
@@ -213,9 +216,11 @@ body <- dashboardBody(
 								conditionalPanel(condition = "input.submit_ft_mpviz > 0",
 																 fluidRow(
 																 	column(6,
+																 				 h5(tags$b("Before filters")),
 																 				 plotlyOutput("p1")
 																 	),
 																 	column(6,
+																 				 h5(tags$b("After filters")),
 																 				 plotlyOutput("p2")
 																 	)
 																 ),

@@ -27,10 +27,12 @@ function(input, output, session) {
 	annot_check <- reactiveVal(FALSE)
 	inherit_check <- reactiveVal(FALSE)
 	preproc_check <- reactiveVal(FALSE)
+	genes_check <- reactiveVal(FALSE)
 	
 	prob_regions_file <- reactiveVal(NULL)
 	annot_output_file <- reactiveVal(NULL)
 	inherit_output_file <- reactiveVal(NULL)
+	exclusion_list <- reactiveVal(NULL)
 	
 	quality_metrics <- reactiveVal(NULL)
 	filtered_ds <- reactiveVal(NULL) #arrow dataset to avoid loading file in memory
@@ -45,13 +47,8 @@ function(input, output, session) {
 		
 		# Essaie de valider le fichier
 		ret <- check_input_file(filepath, file_type = "cnv")
-		
 		cnv_check(ret$status)
-		if(cnv_check()){
-			output$cnv_tsv_status <- renderText(ret$msg)
-		} else {
-			output$cnv_tsv_status <- renderText(ret$msg)
-		}
+		output$cnv_tsv_status <- renderText(ret$msg)
 	})
 	
 	observeEvent(input$ped_tsv, {
@@ -61,13 +58,8 @@ function(input, output, session) {
 		
 		# Essaie de valider le fichier
 		ret <- check_input_file(filepath, file_type = "ped")
-		
 		ped_check(ret$status)
-		if(ped_check()){
-			output$ped_tsv_status <- renderText(ret$msg)
-		} else {
-			output$ped_tsv_status <- renderText(ret$msg)
-		}
+		output$ped_tsv_status <- renderText(ret$msg)
 		
 	})
 	
@@ -78,12 +70,21 @@ function(input, output, session) {
 		
 		# Essaie de valider le fichier
 		ret <- check_input_file(filepath, file_type = "prb")
-		
 		prb_check(ret$status)
-		if(prb_check()){
-			output$prb_tsv_status <- renderText(ret$msg)
-		} else {
-			output$prb_tsv_status <- renderText(ret$msg)
+		output$prb_tsv_status <- renderText(ret$msg)
+		
+	})
+	
+	observeEvent(input$exclus_genes, {
+		req(input$exclus_genes)  # Attend que le fichier soit chargé
+		
+		filepath <- input$exclus_genes$datapath
+		
+		ret <- load_gene_ids(filepath)
+		genes_check(ret$status)
+		output$exclus_genes_status <- renderText(ret$msg)
+		if(genes_check()){
+			exclusion_list(ret$genes)
 		}
 		
 	})
@@ -340,14 +341,15 @@ function(input, output, session) {
 			# convert CNV size range
 			min_cnv_size <- parse_cnv_size_value(cnv_range[1])
 			max_cnv_size <- parse_cnv_size_value(cnv_range[2])
-			min_exon_ov <- isolate(input$min_exon_ov)
+			exclusion_list <- isolate(exclusion_list())
+			min_loeuf <- isolate(input$min_loeuf)
 			min_transcript_ov <- isolate(input$min_transcript_ov)
-			exclus_genes <- isolate(input$exclus_genes)
 			quality_metric <- isolate(input$quality_metric)
 			max_prb_region_ov <- isolate(input$max_prb_region_ov)
 			# get quality metric thresholds
 			min_qty_metric <- isolate(input$quality_metric_min)
 			max_qty_metric <- isolate(input$quality_metric_max)
+			plot_type <- isolate(input$plot_type)
 			
 			dataset <- arrow::open_tsv_dataset(inherit_output_file())
 			
@@ -381,13 +383,6 @@ function(input, output, session) {
 					Size <= max_cnv_size
 				)
 			
-			if(min_exon_ov > 0){
-				filtered_dataset <- filtered_dataset %>% 
-					dplyr::filter(
-						Exon_Overlap >= min_exon_ov/100
-					)
-			}
-			
 			if(min_transcript_ov > 0){
 				filtered_dataset <- filtered_dataset %>% 
 					dplyr::filter(
@@ -403,17 +398,31 @@ function(input, output, session) {
 			}
 			
 			# apply exclusion list
-			# TODO: est-ce qu'on retire un CNV dès qu'il impact un "green" genes?
-			if(!is.null(exclus_genes)){
-				lines <- tryCatch(readLines(exclus_genes$datapath, warn = FALSE), 
-													error = function(e) character())
-				exclusion_list <- unique(trimws(lines[nzchar(trimws(lines))]))
-				filtered_dataset <- filtered_dataset %>% dplyr::filter(!GeneID %in% exclusion_list)
-			}		
+			if(!is.null(exclusion_list)){
+				# get cnv_id that contain an excluded genes
+				cnv_ids_2_remove <- unique(filtered_dataset %>% select(cnv_id, GeneID) %>% 
+																	 	filter(GeneID %in% exclusion_list) %>% pull(cnv_id))
+				
+				if(length(cnv_ids_2_remove) > 0){
+					filtered_dataset <- filtered_dataset %>% dplyr::filter(!cnv_id %in% cnv_ids_2_remove)
+				}
+			}
+			
+			# apply LOEUF filter
+			if(min_loeuf > 0){
+				# get cnv_id that contain an excluded genes (LOEUF < min_loeuf)
+				cnv_ids_2_remove <- unique(filtered_dataset %>% select(cnv_id, LOEUF) %>% 
+																	 	filter(LOEUF < min_loeuf) %>% pull(cnv_id))
+				
+				if(length(cnv_ids_2_remove) > 0){
+					filtered_dataset <- filtered_dataset %>% dplyr::filter(!cnv_id %in% cnv_ids_2_remove)
+				}
+			}
 			
 			# update reactive filtered dataset
 			filtered_ds(filtered_dataset)
 			
+			# TODO: control this calculation
 			mp <- filtered_ds() %>% 
 				dplyr::select(cnv_id, Type, all_of(transmission_col)) %>%
 				mutate(transmission = as.logical(.data[[transmission_col]])) %>%
@@ -459,7 +468,7 @@ function(input, output, session) {
 			incProgress(0.7, detail = "Plotting deletions in progress...")
 			output$plot_overview_del <- renderPlotly({
 				
-				if(input$plot_type == "mp_quality"){
+				if(plot_type == "mp_quality"){
 					dat <- rbind(mp_vs_metric_by_size(ds =  filtered_ds() %>% dplyr::filter(Type == "DEL"),
 																						quality_metric = quality_metric,
 																						thresholds = c(min_qty_metric, max_qty_metric),
@@ -476,7 +485,7 @@ function(input, output, session) {
 				
 				if(nrow(dat) > 0){
 					
-					if(input$plot_type == "mp_quality"){
+					if(plot_type == "mp_quality"){
 						p <- plot_mp_vs_metric(dt = dat,
 																	 title = "Mendelian Precision - DEL",
 																	 subtitle = "All filtered CNVs",
@@ -591,8 +600,8 @@ function(input, output, session) {
 			
 		})
 	})
-
-																					 
+	
+	
 	
 	
 	output$finetune_ui <- renderUI({
@@ -656,5 +665,5 @@ function(input, output, session) {
 		)
 		
 	})
-
+	
 }
