@@ -35,7 +35,12 @@ function(input, output, session) {
 	exclusion_list <- reactiveVal(NULL)
 	
 	quality_metrics <- reactiveVal(NULL)
-	filtered_ds <- reactiveVal(NULL) #arrow dataset to avoid loading file in memory
+	
+	#arrow dataset to avoid loading file in memory 
+	complete_ds <- reactiveVal(NULL) # [ALL CNVS]
+	filtered_ds <- reactiveVal(NULL) # [CNVs after primary filters]
+	ft_complete_ds <- reactiveVal(NULL) # [Fine-tuning ALL CNVS after secondary filters]
+	ft_filtered_ds <- reactiveVal(NULL) # [Fine-tuning CNVs after primary AND secondary filters]
 	
 	baseline_DEL_plot <-  reactiveVal(NULL)
 	baseline_DUP_plot <-  reactiveVal(NULL)
@@ -364,6 +369,9 @@ function(input, output, session) {
 				TRUE ~ NA_character_
 			))
 			
+			# save the complete dataset
+			complete_ds(dataset)
+			
 			# calcul de la MP globale
 			transmission_col <- ifelse(test = isolate(input$transmission) == 1, 
 																 yes = "transmitted_cnv", 
@@ -677,7 +685,7 @@ function(input, output, session) {
 			shinyjs::disable("submit_ft_mpviz")
 		}
 	})
-
+	
 	
 	observeEvent(input$submit_ft_mpviz, {
 		withProgress(message = "Running analysis...", value = 0, {
@@ -704,9 +712,10 @@ function(input, output, session) {
 				clean_plot_for_plotly(p)
 			})
 			
-			### P2 - 4: after_add_filters ###
+			### P2: after_add_filters ###
 			# get filters
-			df <- filtered_ds()
+			filtered_df <- filtered_ds()
+			complete_df <- complete_ds()
 			
 			for (m in quality_metrics()) {
 				op <- isolate(input[[paste0("filter_", m, "_op")]])
@@ -715,19 +724,24 @@ function(input, output, session) {
 				if (!is.null(op) && op != "NA" && !is.na(val)) {
 					
 					if (op == ">=") {
-						df <- df %>% filter(.data[[m]] >= val)
+						filtered_df <- filtered_df %>% filter(.data[[m]] >= val)
+						complete_df <- complete_df %>% filter(.data[[m]] >= val)
 					} else if (op == "<=") {
-						df <- df %>% filter(.data[[m]] <= val)
+						filtered_df <- filtered_df %>% filter(.data[[m]] <= val)
+						complete_df <- complete_df %>% filter(.data[[m]] <= val)
 					}
 				}
 			}
 			
+			# save ds after secondary filters
+			ft_filtered_ds(filtered_df)
+			ft_complete_ds(complete_df)
 			
 			output$after_add_filters <- renderPlotly({
 				p <- NULL
 				
 				# Aucun chamgement
-				if((filtered_ds() %>% count %>% collect) == (df %>% count %>% collect)){
+				if((filtered_ds() %>% count %>% collect) == (ft_filtered_ds() %>% count %>% collect)){
 					print("aucun changement")
 					if(cnv_type == "DEL"){
 						p <- baseline_DEL_plot()
@@ -739,16 +753,16 @@ function(input, output, session) {
 				
 				# if any changes
 				if(plot_type == "mp_quality"){
-					dat <- rbind(mp_vs_metric_by_size(ds =  df %>% dplyr::filter(Type == cnv_type),
+					dat <- rbind(mp_vs_metric_by_size(ds =  ft_filtered_ds() %>% dplyr::filter(Type == cnv_type),
 																						quality_metric = quality_metric,
 																						thresholds = c(min_qty_metric, max_qty_metric),
 																						transmission_col = transmission_col),
-											 mp_vs_metric(ds = df %>% dplyr::filter(Type == cnv_type),
+											 mp_vs_metric(ds = ft_filtered_ds() %>% dplyr::filter(Type == cnv_type),
 											 						 quality_metric = quality_metric,
 											 						 thresholds = c(min_qty_metric, max_qty_metric),
 											 						 transmission_col = transmission_col))
 				} else {
-					dat <- mp_by_size(ds = df %>% dplyr::filter(Type == cnv_type),
+					dat <- mp_by_size(ds = ft_filtered_ds() %>% dplyr::filter(Type == cnv_type),
 														transmission_col = transmission_col)
 				}
 				
@@ -772,9 +786,213 @@ function(input, output, session) {
 				
 				clean_plot_for_plotly(p)
 			})
-			
 		})
 	})
 	
+	observeEvent(c(input$comp_plot1_type, input$submit_ft_mpviz), {
+		req(ft_filtered_ds())
+		req(ft_complete_ds())
+		cnv_type <- isolate(input$cnv_type)
+		plot_type <- isolate(input$plot_type)
+		quality_metric <- isolate(input$quality_metric)
+		# get quality metric thresholds
+		min_qty_metric <- isolate(input$quality_metric_min)
+		max_qty_metric <- isolate(input$quality_metric_max)
+		# transmission type
+		transmission_col <- ifelse(test = isolate(input$transmission) == 1, 
+															 yes = "transmitted_cnv", 
+															 no = "transmitted_gene")
+		
+		### P3: after_add_filters ###
+
+		df1 <- switch(input$comp_plot1_type,
+									
+									# Filtrer les CNVs associés à un gène
+									genic_only = {
+										ft_filtered_ds() %>% dplyr::filter(!is.na(GeneID))
+									},
+									
+									# Filtrer les CNVs intergéniques
+									intergenic_only = {
+										ft_filtered_ds() %>% dplyr::filter(is.na(GeneID))
+									},
+									
+									# Pas de filtre sur les gènes exclus
+									no_excluded_genes = {
+										# TODO: ajouter les filtres primaires
+										ft_complete_ds()
+									},
+									
+									# Retirer les CNVs sur gènes contraints (LOEUF < 1)
+									no_constrained_genes = {
+										
+										# TODO: ajouter les filtres primaires
+										cnv_ids_to_remove <- ft_complete_ds() %>%
+											dplyr::filter(!is.na(LOEUF) & LOEUF < 1) %>%
+											dplyr::pull(cnv_id) %>% unique()
+										
+										if(length(cnv_ids_to_remove) > 0){
+											ft_complete_ds() %>% dplyr::filter(!cnv_id %in% cnv_ids_to_remove)
+										} else {
+											ft_complete_ds()
+										}
+									},
+									
+									# Fallback si aucune option ne matche
+									{
+										NULL
+									}
+		)
+		
+		output$comp_plot1 <- renderPlotly({
+			p <- NULL
+			
+			# Aucun chamgement
+			if( is.null(df1) || (df1 %>% count %>% collect) == 0){
+				print("Problem in p3 - no data")
+				return(NULL)
+			}
+			
+			# if any changes
+			if(plot_type == "mp_quality"){
+				dat <- rbind(mp_vs_metric_by_size(ds =  df1 %>% dplyr::filter(Type == cnv_type),
+																					quality_metric = quality_metric,
+																					thresholds = c(min_qty_metric, max_qty_metric),
+																					transmission_col = transmission_col),
+										 mp_vs_metric(ds = df1 %>% dplyr::filter(Type == cnv_type),
+										 						 quality_metric = quality_metric,
+										 						 thresholds = c(min_qty_metric, max_qty_metric),
+										 						 transmission_col = transmission_col))
+			} else {
+				dat <- mp_by_size(ds = df1 %>% dplyr::filter(Type == cnv_type),
+													transmission_col = transmission_col)
+			}
+			
+			if(nrow(dat) > 0){
+				
+				if(plot_type == "mp_quality"){
+					p <- plot_mp_vs_metric(dt = dat,
+																 title = paste0("MP - ", 
+																 							 cnv_type, " - ",input$comp_plot1_type),
+																 subtitle = "",
+																 y_lab = "Mendelian Precision",
+																 x_lab = paste0(quality_metric, " threshold (≥)"))
+				} else {
+					p <- plot_mp_vs_size(dt = dat,
+															 title = paste0("MP - ", 
+															 							 cnv_type, " - ",input$comp_plot1_type),
+															 subtitle = "",
+															 y_lab = "Mendelian Precision",
+															 x_lab = "CNV Size (binned)")
+				}
+				
+			}
+			
+			clean_plot_for_plotly(p)
+		})
+	})
 	
+	observeEvent(c(input$comp_plot2_type, input$submit_ft_mpviz), {
+		req(ft_filtered_ds())
+		req(ft_complete_ds())
+		cnv_type <- isolate(input$cnv_type)
+		plot_type <- isolate(input$plot_type)
+		quality_metric <- isolate(input$quality_metric)
+		# get quality metric thresholds
+		min_qty_metric <- isolate(input$quality_metric_min)
+		max_qty_metric <- isolate(input$quality_metric_max)
+		# transmission type
+		transmission_col <- ifelse(test = isolate(input$transmission) == 1, 
+															 yes = "transmitted_cnv", 
+															 no = "transmitted_gene")
+		
+		### P4: after_add_filters ###
+		
+		df1 <- switch(input$comp_plot2_type,
+									
+									# Filtrer les CNVs associés à un gène
+									genic_only = {
+										ft_filtered_ds() %>% dplyr::filter(!is.na(GeneID))
+									},
+									
+									# Filtrer les CNVs intergéniques
+									intergenic_only = {
+										ft_filtered_ds() %>% dplyr::filter(is.na(GeneID))
+									},
+									
+									# Pas de filtre sur les gènes exclus
+									no_excluded_genes = {
+										# TODO: ajouter les filtres primaires
+										ft_complete_ds()
+									},
+									
+									# Retirer les CNVs sur gènes contraints (LOEUF < 1)
+									no_constrained_genes = {
+										
+										# TODO: ajouter les filtres primaires
+										cnv_ids_to_remove <- ft_complete_ds() %>%
+											dplyr::filter(!is.na(LOEUF) & LOEUF < 1) %>%
+											dplyr::pull(cnv_id) %>% unique()
+										
+										if(length(cnv_ids_to_remove) > 0){
+											ft_complete_ds() %>% dplyr::filter(!cnv_id %in% cnv_ids_to_remove)
+										} else {
+											ft_complete_ds()
+										}
+									},
+									
+									# Fallback si aucune option ne matche
+									{
+										NULL
+									}
+		)
+		
+
+		output$comp_plot2 <- renderPlotly({
+			p <- NULL
+			
+			# Aucun chamgement
+			if( is.null(df1) || (df1 %>% count %>% collect) == 0){
+				print("Problem in p4 - no data")
+				return(NULL)
+			}
+			
+			# if any changes
+			if(plot_type == "mp_quality"){
+				dat <- rbind(mp_vs_metric_by_size(ds =  df1 %>% dplyr::filter(Type == cnv_type),
+																					quality_metric = quality_metric,
+																					thresholds = c(min_qty_metric, max_qty_metric),
+																					transmission_col = transmission_col),
+										 mp_vs_metric(ds = df1 %>% dplyr::filter(Type == cnv_type),
+										 						 quality_metric = quality_metric,
+										 						 thresholds = c(min_qty_metric, max_qty_metric),
+										 						 transmission_col = transmission_col))
+			} else {
+				dat <- mp_by_size(ds = df1 %>% dplyr::filter(Type == cnv_type),
+													transmission_col = transmission_col)
+			}
+			
+			if(nrow(dat) > 0){
+				
+				if(plot_type == "mp_quality"){
+					p <- plot_mp_vs_metric(dt = dat,
+																 title = paste0("MP - ", 
+																 							 cnv_type, " - ",input$comp_plot2_type),
+																 subtitle = "",
+																 y_lab = "Mendelian Precision",
+																 x_lab = paste0(quality_metric, " threshold (≥)"))
+				} else {
+					p <- plot_mp_vs_size(dt = dat,
+															 title = paste0("MP - ", 
+															 							 cnv_type, " - ",input$comp_plot2_type),
+															 subtitle = "",
+															 y_lab = "Mendelian Precision",
+															 x_lab = "CNV Size (binned)")
+				}
+				
+			}
+			
+			clean_plot_for_plotly(p)
+		})
+	})
 }

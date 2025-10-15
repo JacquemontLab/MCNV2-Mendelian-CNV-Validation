@@ -168,7 +168,7 @@ body <- dashboardBody(
 								radioButtons("plot_type", "Plot type",
 														 choices = c("MP x Quality metric" = "mp_quality",
 														 						"MP x CNV size" = "mp_size"),
-														 selected = "mp_quality"
+														 selected = "mp_size"
 								),
 								conditionalPanel(condition = "input.plot_type == 'mp_quality'",
 																 helpText("Choose a quantitative variable to use as a variable threshold."),
@@ -231,18 +231,24 @@ body <- dashboardBody(
 																 hr(),
 																 fluidRow(
 																 	column(6,
-																 				 selectizeInput("p3_type", 
-																 				 							 label = "Comparison 1",
-																 				 							 choices = c("type1","type2","type3","type4"),
-																 				 							 selected = "type1"),
-																 				 plotlyOutput("p3")
+																 				 selectizeInput("comp_plot1_type", 
+																 				 							 label = "After additional filters",
+																 				 							 choices = c("Genic CNVs only" = "genic_only",
+																 				 							 						"Intergenic CNVs only" = "intergenic_only",
+																 				 							 						"No excluded genes" = "no_excluded_genes",
+																 				 							 						"No constrained genes (LOEUF < 1)" = "no_constrained_genes"),
+																 				 							 selected = "genic_only"),
+																 				 plotlyOutput("comp_plot1")
 																 	),
 																 	column(6,
-																 				 selectizeInput("p4_type", 
-																 				 							 label = "Comparison 2",
-																 				 							 choices = c("type1","type2","type3","type4"),
-																 				 							 selected = "type2"),
-																 				 plotlyOutput("p4")
+																 				 selectizeInput("comp_plot2_type", 
+																 				 							 label = "After additional filters",
+																 				 							 choices = c("Genic CNVs only" = "genic_only",
+																 				 							 						"Intergenic CNVs only" = "intergenic_only",
+																 				 							 						"No excluded genes" = "no_excluded_genes",
+																 				 							 						"No constrained genes (LOEUF < 1)" = "no_constrained_genes"),
+																 				 							 selected = "intergenic_only"),
+																 				 plotlyOutput("comp_plot2")
 																 	)
 																 )
 																 
