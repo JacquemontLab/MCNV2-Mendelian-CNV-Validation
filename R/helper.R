@@ -22,7 +22,7 @@ cnv_size_shapes <- c(
 
 #' @export
 check_input_file <- function(filepath, 
-														 file_type = c("cnv", "ped", "annot","prb", "preproc", "gene"), 
+														 file_type = c("cnv", "ped","prb", "preproc"), 
 														 sep = "\t") {
 	file_type <- match.arg(file_type)
 	
@@ -31,7 +31,8 @@ check_input_file <- function(filepath,
 	}
 	
 	# Read header
-	header <- names(read.table(filepath, header = TRUE, sep = sep, nrows = 1, check.names = FALSE))
+	header <- names(read.table(filepath, header = TRUE, sep = sep, 
+														 nrows = 1, check.names = FALSE))
 	header_lower <- tolower(header)
 	
 	# Define accepted column variants per file type
@@ -74,13 +75,12 @@ check_input_file <- function(filepath,
 				sample = c("sampleid", "sample_id", "id_sample","sampleid_child"),
 				type   = c("type", "svtype", "variant_type","type_child"),
 				length = c("size","length","size_child"),
-				#exon_overlap = c("exon_overlap"),
 				transcript_overlap = c("transcript_overlap","transcript_bp_overlap","bp_overlap"),
-				geneid = c("gene_id"),
+				geneid = c("gene_id","geneid"),
 				biotype = c("biotype","gene_type"),
 				cnv_inherit = c("inheritance_by_cnv","transmitted_cnv"),
-				gene_inherit = c("inheritance_by_gene","transmitted_gene")
-				#loeuf = c("loeuf")
+				gene_inherit = c("inheritance_by_gene","transmitted_gene"),
+				loeuf = c("loeuf")
 			)
 		),
 		other = list(
@@ -127,6 +127,62 @@ check_input_file <- function(filepath,
 	
 	return(list(status = TRUE, msg = "✅ File check passed!"))
 }
+
+#' @export
+load_gene_ids <- function(filepath) {
+	
+	# --- Step 1: basic existence check
+	if (!file.exists(filepath)) {
+		return(list(status = FALSE, 
+								msg = paste0("❌ File not found: ", filepath),
+								genes = NULL))
+	}
+	
+	# --- Step 2: read safely, only first column, ignore empty lines or comments
+	df <- NULL
+	df <- tryCatch(
+		readr::read_tsv(
+			filepath,
+			col_names = FALSE,
+			col_types = readr::cols(.default = readr::col_character()),
+			comment = "#",
+			progress = FALSE,
+			show_col_types = FALSE
+		),
+		error = function(e) print(e))
+	
+	if(is.null(df)) return(list(status = FALSE, 
+															msg = paste0("❌ Unable to read: ", filepath),
+															genes = NULL))
+															
+	# --- Step 3: structure checks
+	if (ncol(df) < 1) return(list(status = FALSE, 
+																msg = "❌ File must contain at least one column.",
+																genes = NULL))
+	if (nrow(df) == 0) return(list(status = FALSE, 
+																 msg = "❌ File is empty.",
+																 genes = NULL))
+
+	# --- Step 4: keep only first column
+	genes <- df[[1]]
+	
+	# --- Step 5: validate format (Ensembl Gene IDs)
+	valid_pattern <- "^ENSG[0-9]+$"
+	invalid <- genes[!grepl(valid_pattern, genes)]
+	if (length(invalid) > 0) {
+		return(list(status = FALSE, 
+								msg = "❌ Invalid Ensembl Gene IDs detected.",
+								genes = NULL))
+	}
+	
+	# --- Step 6: return clean vector (no duplicates, no NAs)
+	genes <- unique(na.omit(trimws(genes)))
+
+	return(list(status = TRUE, 
+							msg = paste0("✅ Loaded ", length(genes), " IDs."),
+							genes = genes))
+}
+
 
 #' @export
 annotate <- function(cnvs_file, prob_regions_file, output_file, 
