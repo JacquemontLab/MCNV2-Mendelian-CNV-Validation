@@ -430,7 +430,7 @@ function(input, output, session) {
 			if(!is.null(exclusion_list)){
 				# get cnv_id that contain an excluded genes
 				cnv_ids_2_remove <- unique(filtered_dataset %>% select(cnv_id, GeneID) %>% 
-																	 	filter(GeneID %in% exclusion_list) %>% pull(cnv_id))
+																	 	filter(GeneID %in% exclusion_list) %>% dplyr::pull(cnv_id))
 				
 				if(length(cnv_ids_2_remove) > 0){
 					filtered_dataset <- filtered_dataset %>% dplyr::filter(!cnv_id %in% cnv_ids_2_remove)
@@ -441,7 +441,7 @@ function(input, output, session) {
 			if(min_loeuf > 0){
 				# get cnv_id that contain an excluded genes (LOEUF < min_loeuf)
 				cnv_ids_2_remove <- unique(filtered_dataset %>% select(cnv_id, LOEUF) %>% 
-																	 	filter(LOEUF < min_loeuf) %>% pull(cnv_id))
+																	 	filter(LOEUF < min_loeuf) %>% dplyr::pull(cnv_id))
 				
 				if(length(cnv_ids_2_remove) > 0){
 					filtered_dataset <- filtered_dataset %>% dplyr::filter(!cnv_id %in% cnv_ids_2_remove)
@@ -630,7 +630,7 @@ function(input, output, session) {
 		
 		outputs <- lapply(quality_metrics(), function(metric) {
 			
-			col_vals <- filtered_ds() %>% pull(all_of(metric))
+			col_vals <- filtered_ds() %>% dplyr::pull(all_of(metric))
 			rng <- range(col_vals, na.rm = TRUE)
 			
 			ns_metric <- paste0("filter_", metric)
