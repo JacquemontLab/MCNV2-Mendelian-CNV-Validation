@@ -4,8 +4,8 @@ Title: MCNV2 – Mendelian CNV Validation
 Version: 0.1.0
 Authors@R: c(
     person(
-      "Jane", "Doe",
-      email = "jane@example.com",
+      "Mame", "Seynabou",
+      email = "mame.seynabou.diop@umontreal.ca",
       role = c("aut", "cre")
     )
   )
@@ -39,4 +39,4 @@ Imports:
         parallel,
         datamods,
         reticulate
-RoxygenNote: 7.3.2
+RoxygenNote: 7.3.3

@@ -16,7 +16,14 @@ MCNV2 can be installed directly from GitHub:
 
 ```
 install.packages("devtools")
-devtools::install_github("xxx/MCNV2")
+
+usethis::create_github_token()
+gitcreds::gitcreds_set()
+
+devtools::install_github(
+  "git@github.com:JacquemontLab/MCNV2-Mendelian-CNV-Validation.git",
+  ref = "package-integration"
+)
 ```
 
 Or if you have a local source tarball:
@@ -44,7 +51,7 @@ MCNV2 relies on Python 3 for CNV annotation and inheritance calculation.
 
 ```r
 library(reticulate)
-use_python("/path/to/python3", required = TRUE)
+use_python(Sys.which("python3"), required = TRUE)
 ```
 
 * MCNV2 also requires a few Python packages, which can be installed in a dedicated virtual environment:
@@ -66,7 +73,8 @@ This will create a virtual environment named `r-MCNV2` and install all necessary
 * To use a specific version, specify the full path in R:
 
 ```r
-MCNV2::launch(bedtools_path = "/usr/local/bin/bedtools", results_dir = "~/projects/mcnv2_results")
+library(MCNV2)
+MCNV2::launch(bedtools_path = Sys.which("bedtools"), results_dir = "~/projects/mcnv2_results")
 ```
 
 * Alternatively, you can download a precompiled release from [MCNV2 releases](https://github.com/xxx/MCNV2-Mendelian-CNV-Validation/releases) and install from source in R:
@@ -99,10 +107,7 @@ library(reticulate)
 use_virtualenv("r-MCNV2", required = TRUE)
 
 library(MCNV2)
-MCNV2::launch(
-  bedtools_path = "/usr/local/bin/bedtools",
-  results_dir   = "~/projects/mcnv2_results"
-)
+launch(bedtools_path = Sys.which("bedtools"), results_dir = "~/projects/mcnv2_results")
 ```
 
 This will launch the interactive Shiny app for CNV validation and annotation.
