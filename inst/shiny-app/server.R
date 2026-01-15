@@ -17,7 +17,7 @@ params <- getOption("MCNV2.params", default = list())
 
 bedtools_path <- params$bedtools_path %||% "bedtools" 
 results_dir <- params$results_dir %||% file.path("~", "mcnv2_results")
-results_dir <- path.expand(results_dir)
+
 dir.create(results_dir, recursive = TRUE, showWarnings = FALSE)
 if (!dir.exists(results_dir)) stop("Cannot create results_dir: ", results_dir)
 
