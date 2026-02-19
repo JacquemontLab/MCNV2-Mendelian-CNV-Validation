@@ -6,7 +6,7 @@
 
 ## Overview
 
-MCNV2 is an R package for the validation and annotation of Mendelian CNVs. It provides tools for preprocessing CNV data, gene annotation, and visualization via a Shiny app.
+MCNV2 is an R package for the validation and annotation of CNVs from parent-child trios. It provides tools for preprocessing CNV data, gene annotation, and visualization via a Shiny app.
 
 ---
 
