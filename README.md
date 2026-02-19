@@ -24,8 +24,8 @@ devtools::install_github("JacquemontLab/MCNV2-Mendelian-CNV-Validation")
 Or if you have a local source tarball:
 ```r
 install.packages("/path/to/MCNV2_0.1.0.tar.gz", repos = NULL, type = "source")
-
 ---
+
 
 ## Requirements
 
