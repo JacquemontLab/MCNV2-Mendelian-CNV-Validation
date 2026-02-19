@@ -19,7 +19,6 @@ Python is used for CNV annotation and Mendelian classification. bedtools is requ
 
    devtools::install_github(
      "JacquemontLab/MCNV2-Mendelian-CNV-Validation",
-     ref = "package-integration",
      dependencies = TRUE
    )
 
