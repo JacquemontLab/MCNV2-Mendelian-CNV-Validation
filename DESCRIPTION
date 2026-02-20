@@ -4,8 +4,8 @@ Title: MCNV2 – Mendelian CNV Validation
 Version: 0.1.0
 Authors@R: c(
     person(
-      "", "",
-      email = "",
+      "Audrey", "Lemaçon",
+      email = "XXXXXX",
       role = c("aut", "cre")
     )
   )
