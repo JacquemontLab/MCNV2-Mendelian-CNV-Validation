@@ -473,15 +473,15 @@ function(input, output, session) {
 				distinct() %>%
 				group_by(Type, transmission) %>% 
 				summarise(n = n(), .groups = "drop") %>%
-				collect() %>% 
+				dplyr::collect() %>% 
 				tidyr::complete(Type, transmission = c(FALSE, TRUE), fill = list(n = 0)) %>%
 				group_by(Type) %>% 
 				summarise(n_de_novo = sum(n[!transmission]), 
 									n_inherited = sum(n[transmission]),
 									prop_inherited = n_inherited / (n_de_novo + n_inherited))
 			
-			n_cnvs_all <- dataset %>% dplyr::select(cnv_id) %>% distinct() %>% summarize(n = n()) %>% collect()
-			n_cnvs_filtered <- filtered_ds() %>% dplyr::select(cnv_id) %>% distinct() %>% summarize(n = n()) %>% collect()
+			n_cnvs_all <- dataset %>% dplyr::select(cnv_id) %>% distinct() %>% summarize(n = n()) %>% dplyr::collect()
+			n_cnvs_filtered <- filtered_ds() %>% dplyr::select(cnv_id) %>% distinct() %>% summarize(n = n()) %>% dplyr::collect()
 			
 			output$n_filtered_cnvs <- renderValueBox({
 				valueBox(
@@ -601,7 +601,7 @@ function(input, output, session) {
 	
 	output$filtered_tbl <- renderDataTable({
 		req(filtered_ds())
-		dat <- filtered_ds() %>% head(1000) %>% collect()
+		dat <- filtered_ds() %>% head(1000) %>% dplyr::collect()
 		datatable(dat, options = list(scrollX = TRUE), rownames = FALSE)
 	})
 	
@@ -616,7 +616,7 @@ function(input, output, session) {
 				value = 0, {
 					
 					incProgress(0.2, detail = "Collecting data...")
-					dat <- filtered_ds() %>% collect()
+					dat <- filtered_ds() %>% dplyr::collect()
 					
 					incProgress(0.6, detail = "Writing TSV file...")
 					write.csv(dat, file, row.names = FALSE)
@@ -782,7 +782,7 @@ function(input, output, session) {
 				p <- NULL
 
 				# Aucun chamgement
-				if((filtered_ds() %>% count %>% collect) == (ft_filtered_ds() %>% count %>% collect)){
+				if((filtered_ds() %>% count %>% dplyr::collect) == (ft_filtered_ds() %>% count %>% dplyr::collect)){
 					print("aucun changement")
 					if(cnv_type == "DEL"){
 						p <- baseline_DEL_plot()
@@ -894,7 +894,7 @@ function(input, output, session) {
 			p <- NULL
 			
 			# Aucun chamgement
-			if( is.null(df1) || (df1 %>% count %>% collect) == 0){
+			if( is.null(df1) || (df1 %>% count %>% dplyr::collect) == 0){
 				print("Problem in p3 - no data")
 				return(NULL)
 			}
@@ -1000,7 +1000,7 @@ function(input, output, session) {
 			p <- NULL
 
 			# Aucun chamgement
-			if( is.null(df1) || (df1 %>% count %>% collect) == 0){
+			if( is.null(df1) || (df1 %>% count %>% dplyr::collect) == 0){
 				print("Problem in p4 - no data")
 				return(NULL)
 			}
