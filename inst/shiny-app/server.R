@@ -285,10 +285,9 @@ function(input, output, session) {
 					"Common causes:\n",
 					"  • Sample IDs in CNV file do not match pedigree\n",
 					"  • No complete trios in pedigree (child + father + mother required)\n",
-					"  • CNV type not DEL or DUP\n",
-					"Check the R console for the full error message."
+					"  • CNV type not DEL or DUP"
 				))
-				showNotification("❌ Inheritance failed. Check R console for details.", type = "error", duration = 10)
+				showNotification("❌ Inheritance failed.", type = "error", duration = 10)
 			}
 
 			incProgress(1, detail = "Done!")
