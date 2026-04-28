@@ -64,14 +64,18 @@ Quick Start with Test Data
      results_dir   = "~/mcnv2_results"
    )
 
-Once the app is running:
+In the **Preprocessing** tab:
 
-1. Go to the **MP Exploration** tab
-2. Upload ``sim_cnvs_inheritance.tsv`` as the preprocessed input file
-3. Select a quality metric (e.g., ``Score``)
-4. Set the min/max range and click **Submit**
-5. Explore the MP plots by size and quality metric
-6. Go to **Fine-tuning** to apply additional filters and compare MP curves
+- **CNV file** → upload ``sim_cnvs.tsv``
+- **Pedigree file** → upload ``sim_pedigree.tsv``
+- **Problematic regions** → bundled with the package at
+  ``system.file("resources", "problematic_regions_GRCh38.bed", package = "MCNV2")``
+  — no download needed, the app loads it automatically
+
+In the **MP Exploration** tab:
+
+- Upload ``sim_cnvs_inheritance.tsv`` as the preprocessed input file
+- Select a quality metric and click **Submit**
 
 
 Dataset Description
