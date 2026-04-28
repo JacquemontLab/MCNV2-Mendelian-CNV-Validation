@@ -68,9 +68,8 @@ In the **Preprocessing** tab:
 
 - **CNV file** → upload ``sim_cnvs.tsv``
 - **Pedigree file** → upload ``sim_pedigree.tsv``
-- **Problematic regions** → bundled with the package at
+- **Problematic regions** → bundled with the package, located at
   ``system.file("resources", "problematic_regions_GRCh38.bed", package = "MCNV2")``
-  — no download needed, the app loads it automatically
 
 In the **MP Exploration** tab:
 
