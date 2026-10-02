@@ -264,7 +264,7 @@ function(input, output, session) {
 								tags$div(class = "summary-card-title", icon("arrow-right-arrow-left"), " Transmission"),
 								tags$div(class = "summary-card-body",
 									tags$span(class = "badge-inh", paste("Inherited", format(n_inherited, big.mark=","))) ,
-									tags$span(class = "badge-dn",  paste("De novo", format(n_denovo, big.mark=",")))
+									tags$span(class = "badge-dn",  paste("Non-inherited", format(n_denovo, big.mark=",")))
 								)
 							),
 							tags$div(class = "summary-card",
